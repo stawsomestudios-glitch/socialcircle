@@ -1,8 +1,7 @@
 // The two places the map is centred on. Edit this file to correct them.
 // The city kit has no building names, so these were matched against OpenStreetMap.
 
-// OpenStreetMap leaves this building unnamed. It is chosen because the buildings
-// around it are named as other buildings (Van-De-Velde-Bau, Kubus, Werkstattkubus).
+// OpenStreetMap lists "Hauptgebäude", Geschwister-Scholl-Straße 8, inside this footprint.
 export const MAIN_BUILDING = {
   label: 'Bauhaus main building',
   buildingIds: ['14780'],

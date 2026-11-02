@@ -2,23 +2,17 @@ import * as THREE from 'three'
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js'
 import { FOCUS, M18_AREA, MAIN_BUILDING } from './places.js'
 
-export const USE_COLORS = {
-  residential: '#d9cfc0',
-  service: '#b9c4c9',
-  education: '#8fa8c4',
-  civic: '#a99fc2',
-  culture: '#b890a9',
-  entertainment: '#cfa5b5',
-  retail: '#d8b27a',
-  food_and_drink: '#d39b7f',
-  office: '#9db7a8',
-  health: '#a8cdb8',
-  accommodation: '#c7b796',
-  sport: '#9fc08a',
-  transport: '#8f9499',
-  light_industrial: '#a39882',
-  undefined: '#d4d4d0',
+export const CATEGORY_COLORS = {
+  bauhaus: '#e3b505',
+  museum: '#7a4fb0',
+  library: '#2b6cb8',
+  cafe: '#e0559a',
+  food: '#ef8a17',
+  shop: '#4c9a5b',
 }
+
+// Every other building gets one of these, picked from its id so it never changes.
+export const NEUTRAL_TONES = ['#d8cfbe', '#cfc4b0', '#c6b9a3', '#d3c6b4']
 
 export const LAND_COLORS = {
   recreation: '#cfe0bd',
@@ -28,9 +22,10 @@ export const LAND_COLORS = {
   'standing water': '#a9cbe0',
 }
 
+export const GLOW_COLOR = '#e8743b'
+export const GROUND_COLOR = '#efece3'
 export const MAIN_COLOR = '#d1401f'
 export const M18_COLOR = '#008f8a'
-export const CONTEXT_COLOR = '#ecebe8'
 export const WATER_LINE_COLOR = '#7fb0cf'
 
 // Longitude and latitude to metres from the focus point. x is east, z is south.
@@ -77,12 +72,15 @@ export function placeOf(feature) {
   return M18_AREA.buildingIds.includes(String(feature.properties.id)) ? 'm18' : null
 }
 
-export function buildingColor(feature) {
+export function buildingColor(feature, highlights) {
   const place = placeOf(feature)
   if (place === 'main') return MAIN_COLOR
   if (place === 'm18') return M18_COLOR
-  if (feature.properties.source === 'osm') return CONTEXT_COLOR
-  return USE_COLORS[feature.properties.use] ?? USE_COLORS.undefined
+  const id = String(feature.properties.id)
+  const category = highlights[id]?.category
+  if (category) return CATEGORY_COLORS[category]
+  const hash = [...id].reduce((total, character) => total + character.charCodeAt(0), 0)
+  return NEUTRAL_TONES[hash % NEUTRAL_TONES.length]
 }
 
 export function extrudeBuilding(feature) {
@@ -96,11 +94,11 @@ export function extrudeBuilding(feature) {
 
 // All buildings as one mesh, so orbiting stays smooth. `ranges` remembers which
 // triangles belong to which building, so a click can find the building again.
-export function buildCity(features) {
+export function buildCity(features, highlights) {
   const ranges = []
   let triangles = 0
   const parts = features.map((feature) => {
-    const part = paint(extrudeBuilding(feature), buildingColor(feature))
+    const part = paint(extrudeBuilding(feature), buildingColor(feature, highlights))
     triangles += part.attributes.position.count / 3
     ranges.push({ end: triangles, feature })
     return part
@@ -117,6 +115,23 @@ export function findBuilding(ranges, triangle) {
     else low = middle + 1
   }
   return ranges[low].feature
+}
+
+// A soft patch on the ground around each social building. The patches add up,
+// so the ground gets stronger where many places sit close together.
+export function buildGlow(features, highlights, reach) {
+  const parts = features
+    .filter((feature) => placeOf(feature) || highlights[feature.properties.id])
+    .map((feature) => {
+      const ring = feature.geometry.coordinates[0].map(toLocal)
+      const [x, z] = toLocal(centroid(feature))
+      const size = Math.max(...ring.map(([px, pz]) => Math.hypot(px - x, pz - z)))
+      const part = new THREE.CircleGeometry(size + reach, 32)
+      part.rotateX(-Math.PI / 2)
+      part.translate(x, 0, z)
+      return part
+    })
+  return mergeGeometries(parts)
 }
 
 export function buildLand(features) {

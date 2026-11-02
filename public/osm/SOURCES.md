@@ -27,3 +27,31 @@ Heights here are less reliable than the kit's measured heights. If a building ha
  relation["natural"="water"];);
 out geom;
 ```
+
+## `highlights.json`
+
+The buildings where you may run into people you know, keyed by building id, with `category` (`museum`, `library`, `cafe`, `food`, `shop` or `bauhaus`) and the OpenStreetMap `names` found there. `scripts/build-osm-highlights.mjs` makes it. Downloaded 2026-11-02, same licence.
+
+This is an estimate from what each place is. Nothing here measures where people actually go.
+
+How it decides:
+
+- A whole building counts even if the place takes up only part of it, such as a cafe on the ground floor.
+- If a building has several, the order is museum, library, cafe, food, shop, Bauhaus.
+- A place is only matched to a building that contains it or lies within 15 m of it.
+- The kit's main use also counts: `retail` as shop, `food_and_drink` as food.
+- Archives tagged as libraries are left out, and so are shops people rarely linger in, listed in the script.
+- Bauhaus means the entry names Bauhaus-Universität or a Bauhaus institute, or gives it as operator. Other schools and buildings with no such evidence aren't included.
+
+```
+[out:json][timeout:120][bbox:50.9650,11.3050,50.9925,11.3460];
+(nwr["amenity"~"^(cafe|library|university|college)$"];nwr["tourism"="museum"];
+ nwr["building"="museum"];nwr["building"~"^(university|college)$"];);
+out geom;
+```
+
+```
+[out:json][timeout:120][bbox:50.9650,11.3050,50.9925,11.3460];
+(nwr["amenity"~"^(restaurant|fast_food|bar|pub|biergarten|nightclub|food_court|ice_cream)$"];nwr["shop"];);
+out geom;
+```

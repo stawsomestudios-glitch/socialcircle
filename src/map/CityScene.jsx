@@ -5,8 +5,10 @@ import * as THREE from 'three'
 import { M18_AREA, MAIN_BUILDING } from './places.js'
 import {
   M18_COLOR,
+  GLOW_COLOR,
   WATER_LINE_COLOR,
   buildCity,
+  buildGlow,
   buildLand,
   buildStreets,
   extrudeBuilding,
@@ -17,6 +19,7 @@ import {
 
 // Starts south of the campus, looking north, so north is at the top of the screen.
 const START_CAMERA = [-170, 300, 520]
+export const GLOW_REACH_M = 25
 
 // A text label drawn on a small picture that always faces the camera and keeps its size.
 function Label({ position, children }) {
@@ -59,10 +62,14 @@ function City({ data, selected, onSelect }) {
     }
   }, [data])
   const city = useMemo(
-    () => buildCity([...data.buildings.features, ...context.buildings]),
+    () => buildCity([...data.buildings.features, ...context.buildings], data.highlights),
     [data, context],
   )
   const land = useMemo(() => buildLand(data.plots.features), [data])
+  const glow = useMemo(
+    () => buildGlow([...data.buildings.features, ...context.buildings], data.highlights, GLOW_REACH_M),
+    [data, context],
+  )
   const streets = useMemo(() => buildStreets(data.streets.features), [data])
   const selectedGeometry = useMemo(() => (selected ? extrudeBuilding(selected) : null), [selected])
   const mainLabel = useMemo(
@@ -127,6 +134,10 @@ function City({ data, selected, onSelect }) {
         <lineBasicMaterial color="#9b978e" />
       </lineSegments>
 
+      <mesh geometry={glow} position={[0, 0.8, 0]} renderOrder={1}>
+        <meshBasicMaterial color={GLOW_COLOR} transparent opacity={0.13} depthWrite={false} />
+      </mesh>
+
       <mesh
         geometry={city.geometry}
         castShadow
@@ -143,7 +154,7 @@ function City({ data, selected, onSelect }) {
       {selectedGeometry && (
         <mesh geometry={selectedGeometry}>
           <meshStandardMaterial
-            color="#ffd23f"
+            color="#2b2b2b"
             polygonOffset
             polygonOffsetFactor={-2}
             polygonOffsetUnits={-2}
