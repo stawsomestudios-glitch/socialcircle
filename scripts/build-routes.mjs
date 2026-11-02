@@ -1,4 +1,5 @@
-// Finds the most and least social walking routes from a general point on Merketalstraße to the Bauhaus
+// Finds the most and least social walking routes, for each hour of the day, from a general
+// point on Merketalstraße to the Bauhaus
 // main building, and writes public/osm/routes.json. Run the other two build scripts first.
 //
 // Run with: node scripts/build-routes.mjs <raw Overpass JSON files>
@@ -32,8 +33,8 @@ for (const feature of allBuildings) {
   const id = String(feature.properties.id)
   const ring = feature.geometry.coordinates[0]
   if (!inMap(centroid(ring))) continue
-  if (!highlights[id] && !MAIN_BUILDING.buildingIds.includes(id)) continue
-  areas.push({ id, ring: ring.map(toMetres) })
+  if (!highlights[id]) continue
+  areas.push({ id, ring: ring.map(toMetres), activity: highlights[id].activity })
 }
 
 const CELL = 100
@@ -100,12 +101,17 @@ for (const element of elements.values()) {
     const length = Math.hypot(a.metres[0] - b.metres[0], a.metres[1] - b.metres[1])
     if (!length) continue
     const samples = Math.max(1, Math.ceil(length / 10))
-    let inside = 0
+    // How busy this stretch is at each hour: at each point along it, the busiest social
+    // building whose area covers that point, averaged over the stretch.
+    const busy = new Array(24).fill(0)
     for (let s = 0; s < samples; s++) {
       const t = (s + 0.5) / samples
-      if (areasAt([a.metres[0] + (b.metres[0] - a.metres[0]) * t, a.metres[1] + (b.metres[1] - a.metres[1]) * t]).length) inside++
+      const covering = areasAt([a.metres[0] + (b.metres[0] - a.metres[0]) * t, a.metres[1] + (b.metres[1] - a.metres[1]) * t])
+      for (let hour = 0; hour < 24; hour++) {
+        busy[hour] += Math.max(0, ...covering.map((index) => areas[index].activity[hour])) / samples
+      }
     }
-    const edge = { length, socialShare: inside / samples }
+    const edge = { length, busy }
     a.edges.push({ ...edge, to: b })
     b.edges.push({ ...edge, to: a })
   }
@@ -148,7 +154,7 @@ const start = nearest(network, [toMetres(ROUTE_START.location)])
 const end = nearest(network, mainFeature.geometry.coordinates[0].map(toMetres))
 
 // ---- finding routes
-function shortestPath(costOf) {
+function shortestPath(costOf, hour) {
   const best = new Map([[start.node, 0]])
   const previous = new Map()
   const done = new Set()
@@ -198,46 +204,56 @@ function shortestPath(costOf) {
   }
   const path = []
   for (let at = end.node; at !== start.node; at = previous.get(at).node) path.unshift(previous.get(at))
-  return describe(path)
+  return describe(path, hour)
 }
 
-function describe(path) {
+// A building only counts as passed at an hour when it's fairly busy then.
+const COUNTS_AS_BUSY = 0.25
+
+function describe(path, hour) {
   const places = new Set()
+  const addPlaces = (node) => {
+    areasAt(node.metres).forEach((index) => {
+      if (areas[index].activity[hour] >= COUNTS_AS_BUSY) places.add(areas[index].id)
+    })
+  }
   let length = 0
   let social = 0
   path.forEach(({ node, edge }) => {
     length += edge.length
-    social += edge.length * edge.socialShare
-    areasAt(node.metres).forEach((index) => places.add(areas[index].id))
+    social += edge.length * edge.busy[hour]
+    addPlaces(node)
   })
-  areasAt(end.node.metres).forEach((index) => places.add(areas[index].id))
+  addPlaces(end.node)
   return {
     coordinates: [...path.map(({ node }) => node.point), end.node.point],
     length_m: Math.round(length),
     minutes: Math.round(length / WALK_M_PER_MIN),
     social_m: Math.round(social),
-    social_percent: Math.round((social / length) * 100),
+    bustle_percent: Math.round((social / length) * 100),
     places_passed: places.size,
   }
 }
 
-const shortest = shortestPath((edge) => edge.length)
-const limit = shortest.length_m * MAX_DETOUR
-const fits = (route) => route.length_m <= limit
-const leastOptions = STRENGTHS.map((s) => shortestPath((e) => e.length * (1 + s * e.socialShare))).filter(fits)
-const mostOptions = STRENGTHS.map((s) => shortestPath((e) => e.length * (1 + s * (1 - e.socialShare)))).filter(fits)
-const least = leastOptions.reduce((a, b) => (b.social_m < a.social_m ? b : a), shortest)
-const most = mostOptions.reduce((a, b) => (b.social_m > a.social_m ? b : a), shortest)
+function routesAt(hour) {
+  const shortest = shortestPath((edge) => edge.length, hour)
+  const limit = shortest.length_m * MAX_DETOUR
+  const fits = (route) => route.length_m <= limit
+  const leastOptions = STRENGTHS.map((s) => shortestPath((e) => e.length * (1 + s * e.busy[hour]), hour)).filter(fits)
+  const mostOptions = STRENGTHS.map((s) => shortestPath((e) => e.length * (1 + s * (1 - e.busy[hour])), hour)).filter(fits)
+  return {
+    least: leastOptions.reduce((a, b) => (b.social_m < a.social_m ? b : a), shortest),
+    most: mostOptions.reduce((a, b) => (b.social_m > a.social_m ? b : a), shortest),
+  }
+}
 
-writeFileSync('public/osm/routes.json', JSON.stringify({ most, least }))
+const hours = Array.from({ length: 24 }, (_, hour) => routesAt(hour))
 
-const summary = ({ length_m, minutes, social_m, social_percent, places_passed }) => ({ length_m, minutes, social_m, social_percent, places_passed })
-const segmentsOf = (route) => new Set(route.coordinates.slice(1).map((p, i) => [keyOf(route.coordinates[i]), keyOf(p)].sort().join('|')))
-const mostSegments = segmentsOf(most)
-const sharedSegments = [...segmentsOf(least)].filter((segment) => mostSegments.has(segment)).length
+writeFileSync('public/osm/routes.json', JSON.stringify({ hours }))
+
 console.log('network nodes', network.size, '| social buildings', areas.length)
-console.log('start snaps', Math.round(start.distance), 'm | end snaps', Math.round(end.distance), 'm', end.node.point)
-console.log('shortest', summary(shortest))
-console.log('most', summary(most))
-console.log('least', summary(least))
-console.log('shared segments', sharedSegments, 'of', mostSegments.size, 'in the most social route')
+console.log('start snaps', Math.round(start.distance), 'm | end snaps', Math.round(end.distance), 'm')
+hours.forEach(({ most, least }, hour) => {
+  const same = JSON.stringify(most.coordinates) === JSON.stringify(least.coordinates)
+  console.log(String(hour).padStart(2, '0') + ':00', 'most', most.length_m, 'm', most.bustle_percent + '%', most.places_passed, '| least', least.length_m, 'm', least.bustle_percent + '%', least.places_passed, same ? '| same route' : '')
+})

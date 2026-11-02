@@ -132,6 +132,11 @@ body {
   background: #000;
 }
 
+.symbol.bustle {
+  background: linear-gradient(90deg, #fff, #ee6b75);
+  border: 1px solid #000;
+}
+
 .symbol.water {
   background: #a9d8f2;
 }
@@ -146,6 +151,66 @@ body {
   height: 2px;
   margin-top: 8px;
   background: #d0021b;
+}
+
+.timeline {
+  position: absolute;
+  right: 16px;
+  bottom: 52px;
+  left: 302px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  column-gap: 14px;
+  box-sizing: border-box;
+  padding: 8px 14px;
+  background: #fff;
+  border: 2px solid #000;
+}
+
+.clock {
+  font-family: Righteous, sans-serif;
+  font-size: 28px;
+  line-height: 1;
+}
+
+.track {
+  flex: 1;
+  min-width: 160px;
+}
+
+.track input {
+  display: block;
+  width: 100%;
+  margin: 0;
+  accent-color: #000;
+  cursor: grab;
+}
+
+.track input:active {
+  cursor: grabbing;
+}
+
+.ticks {
+  display: flex;
+  justify-content: space-between;
+  font-size: 11px;
+}
+
+.timeline-note {
+  flex-basis: 100%;
+  margin: 4px 0 0;
+  font-size: 12px;
+}
+
+@media (max-width: 700px) {
+  .timeline {
+    left: 16px;
+  }
+
+  .panel {
+    max-height: 40%;
+  }
 }
 
 .attribution {

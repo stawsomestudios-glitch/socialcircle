@@ -31,7 +31,7 @@ out geom;
 
 The buildings where you may run into people you know, keyed by building id, with `category` (`museum`, `library`, `cafe`, `food`, `shop` or `bauhaus`) and the OpenStreetMap `names` found there. `scripts/build-osm-highlights.mjs` makes it. Downloaded 2026-11-02, same licence.
 
-This is an estimate from what each place is. Nothing here measures where people actually go.
+`activity` is an estimated 24-hour rhythm, from 0 to 1. Nothing here measures where people actually go. It combines two things: a typical rhythm for each kind of place, assumed in `scripts/build-osm-highlights.mjs`, and the place's real opening hours from OpenStreetMap, where listed, read for a weekday in November. A building with several places is as busy as its busiest one.
 
 How it decides:
 
@@ -67,13 +67,13 @@ out geom;
 
 ## `routes.json`
 
-The most and least social walking routes from a general point on Merketalstraße to the Bauhaus main building, made by `scripts/build-routes.mjs`.
+The most and least social walking routes for each hour of the day, in `hours[0]` to `hours[23]`, from a general point on Merketalstraße to the Bauhaus main building, made by `scripts/build-routes.mjs`.
 
 - The network is every OpenStreetMap path and street inside the map that people may walk on. Private ways and motorways are left out.
-- A stretch counts as social where it lies within 25 m of a social building's outline, the same areas the map draws.
+- A stretch is as busy as the busiest social building within 25 m of it at that hour, from `activity` in `highlights.json`. `bustle_percent` is that averaged over the whole route.
 - Neither route may be longer than 1.6 times the shortest walk. Without a limit, the most social route could wander forever.
 - Walking speed is 4.8 km/h, which is 80 m per minute.
-- `places_passed` counts social buildings whose area a route's points touch. It says the route goes near them, not that anyone is there.
+- `places_passed` counts social buildings whose area a route's points touch and that are at least 25% busy at that hour. It says the route goes near them, not that anyone is there.
 
 Each route ends on the path closest to the building's outline, because the data doesn't show where its doors are.
 

@@ -7,6 +7,7 @@ import {
   AREA_BOX,
   COLORS,
   boxOf,
+  buildBustle,
   buildCity,
   buildLines,
   buildOutlineIndex,
@@ -20,6 +21,7 @@ import {
   routeMiddle,
   isInsideMap,
   linesToPairs,
+  paintBustle,
   placeOf,
   titlePosition,
   toLocal,
@@ -109,6 +111,30 @@ function Water({ water }) {
   )
 }
 
+// The glow on the ground. Where areas overlap, the strongest shows instead of adding up.
+function Bustle({ buildings, highlights, hour }) {
+  const invalidate = useThree((state) => state.invalidate)
+  const bustle = useMemo(() => buildBustle(buildings, highlights), [buildings, highlights])
+
+  useEffect(() => {
+    paintBustle(bustle, hour)
+    invalidate()
+  }, [bustle, hour, invalidate])
+
+  return (
+    <mesh geometry={bustle.geometry} position={[0, 0.15, 0]}>
+      <meshBasicMaterial
+        vertexColors
+        side={THREE.DoubleSide}
+        transparent
+        depthWrite={false}
+        blending={THREE.CustomBlending}
+        blendEquation={THREE.MinEquation}
+      />
+    </mesh>
+  )
+}
+
 // Glides the camera to a new view. Grabbing the map stops the glide.
 function CameraFlight({ flight }) {
   const camera = useThree((state) => state.camera)
@@ -148,7 +174,7 @@ function CameraFlight({ flight }) {
   return null
 }
 
-function City({ data, selected, onSelect, flyTo }) {
+function City({ data, hour, selected, onSelect, flyTo }) {
   const buildings = useMemo(() => {
     const outside = data.context.features.filter((f) => f.properties.kind === 'building')
     return [...data.buildings.features, ...outside].filter(isInsideMap)
@@ -163,12 +189,10 @@ function City({ data, selected, onSelect, flyTo }) {
     })),
     [data],
   )
+  const routes = data.routes.hours[hour]
   const routeLines = useMemo(
-    () => ({
-      most: data.routes.most.coordinates.map(toLocal),
-      least: data.routes.least.coordinates.map(toLocal),
-    }),
-    [data],
+    () => ({ most: routes.most.coordinates.map(toLocal), least: routes.least.coordinates.map(toLocal) }),
+    [routes],
   )
 
   const selectedShape = useMemo(() => {
@@ -193,7 +217,7 @@ function City({ data, selected, onSelect, flyTo }) {
 
     if (!onMarkedBuilding && near.distance <= ROUTE_CLICK_PX * perPixel) {
       onSelect({ kind: 'route', key: near.key })
-      flyTo(boxOf(data.routes[near.key].coordinates), CLICK_MARGIN_M)
+      flyTo(boxOf(routes[near.key].coordinates), CLICK_MARGIN_M)
     } else if (feature) {
       onSelect({ kind: 'building', feature })
       flyTo(boxOf(feature.geometry.coordinates[0]), CLICK_MARGIN_M)
@@ -217,6 +241,7 @@ function City({ data, selected, onSelect, flyTo }) {
       </mesh>
 
       <Water water={data.water} />
+      <Bustle buildings={buildings} highlights={data.highlights} hour={hour} />
 
       {boundary.map((points, index) => (
         <Line key={index} points={points} color={COLORS.black} lineWidth={2.5} />
@@ -253,10 +278,10 @@ function City({ data, selected, onSelect, flyTo }) {
           renderOrder={5}
         />
       ))}
-      <Title position={routeMiddle(data.routes.most.coordinates)} anchor={[-0.08, 0.5]}>
+      <Title position={routeMiddle(routes.most.coordinates)} anchor={[-0.08, 0.5]}>
         SOCIAL
       </Title>
-      <Title position={routeMiddle(data.routes.least.coordinates)} anchor={[1.05, 0.5]}>
+      <Title position={routeMiddle(routes.least.coordinates)} anchor={[1.05, 0.5]}>
         ANTISOCIAL
       </Title>
 
@@ -269,7 +294,7 @@ function City({ data, selected, onSelect, flyTo }) {
   )
 }
 
-export default function CityScene({ data, selected, onSelect, viewRequest }) {
+export default function CityScene({ data, hour, selected, onSelect, viewRequest }) {
   const [flight, setFlight] = useState(null)
   const cityBox = useMemo(() => boxOf(allPoints(data.city.boundary)), [data])
   const start = useRef(cameraFor(cityBox, CITY_MARGIN_M, window.innerWidth / window.innerHeight, FOV))
@@ -293,6 +318,7 @@ export default function CityScene({ data, selected, onSelect, viewRequest }) {
       <color attach="background" args={[COLORS.white]} />
       <City
         data={data}
+        hour={hour}
         selected={selected}
         onSelect={onSelect}
         flyTo={(box, margin) => setFlight({ box, margin })}

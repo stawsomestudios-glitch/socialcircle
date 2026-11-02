@@ -48,23 +48,61 @@ function Key({ kind, children }) {
   )
 }
 
+const clock = (hour) => `${String(hour).padStart(2, '0')}:00`
+
 function RouteLine({ route }) {
   return (
     <>
-      {route.length_m.toLocaleString('en')} m, about {route.minutes} min · {route.social_percent}% in social
-      areas · passes {route.places_passed} social buildings
+      {route.length_m.toLocaleString('en')} m, about {route.minutes} min · {route.bustle_percent}% bustle · passes{' '}
+      {route.places_passed} busy {route.places_passed === 1 ? 'place' : 'places'}
     </>
   )
 }
 
-function BuildingInfo({ feature, highlight }) {
+function Timeline({ hour, onChange, routes }) {
+  const same = JSON.stringify(routes.most.coordinates) === JSON.stringify(routes.least.coordinates)
+  return (
+    <section className="timeline">
+      <output htmlFor="hour" className="clock">{clock(hour)}</output>
+      <div className="track">
+        <input
+          id="hour"
+          type="range"
+          min="0"
+          max="23"
+          step="1"
+          value={hour}
+          aria-label="Time of day"
+          aria-valuetext={clock(hour)}
+          onChange={(event) => onChange(Number(event.target.value))}
+        />
+        <div className="ticks" aria-hidden="true">
+          <span>00</span>
+          <span>06</span>
+          <span>12</span>
+          <span>18</span>
+          <span>23</span>
+        </div>
+      </div>
+      <p className="timeline-note">
+        Estimated, typical weekday{same ? '. Too quiet near the route for the two to differ.' : ''}
+      </p>
+    </section>
+  )
+}
+
+function BuildingInfo({ feature, highlight, hour }) {
   const { id, height, source, address, name, height_estimated } = feature.properties
   const place = placeOf(feature)
   const names = highlight?.names.length ? highlight.names : name ? [name] : []
   return (
     <>
       {place === 'main' && <p>{MAIN_BUILDING.label}</p>}
-      {highlight && <p>{CATEGORY_LABELS[highlight.category]}: social</p>}
+      {highlight && (
+        <p>
+          {CATEGORY_LABELS[highlight.category]}: about {Math.round(highlight.activity[hour] * 100)}% busy at {clock(hour)}
+        </p>
+      )}
       {names.map((text) => (
         <p key={text}>{text}</p>
       ))}
@@ -76,21 +114,21 @@ function BuildingInfo({ feature, highlight }) {
   )
 }
 
-function Selection({ selected, data }) {
+function Selection({ selected, data, hour }) {
   return (
     <section className="info">
       {selected.kind === 'route' ? (
         <>
           <h2>{ROUTE_NAMES[selected.key]}</h2>
           <p>
-            <RouteLine route={data.routes[selected.key]} />
+            <RouteLine route={data.routes.hours[hour][selected.key]} />
           </p>
         </>
       ) : (
         <>
           <h2>Selected building</h2>
           {selected.kind === 'building' ? (
-            <BuildingInfo feature={selected.feature} highlight={data.highlights[selected.feature.properties.id]} />
+            <BuildingInfo feature={selected.feature} highlight={data.highlights[selected.feature.properties.id]} hour={hour} />
           ) : (
             <p>Outside the black map area, so shown as an outline only.</p>
           )}
@@ -105,6 +143,7 @@ export default function App() {
   const [error, setError] = useState(null)
   const [selected, setSelected] = useState(null)
   const [viewRequest, setViewRequest] = useState(null)
+  const [hour, setHour] = useState(() => new Date().getHours())
 
   useEffect(() => {
     loadData().then(setData).catch((e) => setError(e.message))
@@ -113,19 +152,22 @@ export default function App() {
   if (error) return <p className="status">The map data didn't load ({error}).</p>
   if (!data) return <p className="status">Loading Weimar…</p>
 
+  const routes = data.routes.hours[hour]
+
   return (
     <div className="app">
-      <CityScene data={data} selected={selected} onSelect={setSelected} viewRequest={viewRequest} />
+      <CityScene data={data} hour={hour} selected={selected} onSelect={setSelected} viewRequest={viewRequest} />
 
       <aside className="panel">
         <h1>socialcircle</h1>
-        <p>Drag to orbit, right-drag to pan, scroll to zoom. Click a building or route to go to it.</p>
+        <p>Drag to orbit, right-drag to pan, scroll to zoom. Click a building or route to go to it. Drag the timeline to change the hour.</p>
         <div className="buttons">
           <button onClick={() => setViewRequest({ name: 'city' })}>Whole city</button>
           <button onClick={() => setViewRequest({ name: 'area' })}>Route area</button>
         </div>
-        {selected && <Selection selected={selected} data={data} />}
+        {selected && <Selection selected={selected} data={data} hour={hour} />}
         <ul className="legend">
+          <Key kind="bustle">Bustle at this hour, quiet to busy</Key>
           <Key kind="main">Bauhaus main building</Key>
           <Key kind="black">Buildings in the map area</Key>
           <Key kind="outline">Buildings in the rest of Weimar</Key>
@@ -135,17 +177,19 @@ export default function App() {
         <h2>merketalstraße to bauhaus</h2>
         <ul className="legend">
           <Key kind="route-most">
-            <strong>SOCIAL.</strong> <RouteLine route={data.routes.most} />
+            <strong>SOCIAL.</strong> <RouteLine route={routes.most} />
           </Key>
           <Key kind="route-least">
-            <strong>ANTISOCIAL.</strong> <RouteLine route={data.routes.least} />
+            <strong>ANTISOCIAL.</strong> <RouteLine route={routes.least} />
           </Key>
         </ul>
         <p className="note">
-          An estimate from what each place is, not a record of where people actually go. Routes are at most
-          1.6 × the shortest walk.
+          Bustle is an estimate from opening hours and the usual rhythm of each kind of place. It doesn't count
+          real people. Routes are at most 1.6 × the shortest walk.
         </p>
       </aside>
+
+      <Timeline hour={hour} onChange={setHour} routes={routes} />
 
       <footer className="attribution">
         {ATTRIBUTION} City boundary, surroundings, building types and routes: ©{' '}

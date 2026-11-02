@@ -1,6 +1,6 @@
 import * as THREE from 'three'
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js'
-import { FOCUS, MAIN_BUILDING, MAP_BOUNDARY } from './places.js'
+import { FOCUS, MAIN_BUILDING, MAP_BOUNDARY, SOCIAL_REACH_M } from './places.js'
 
 export const COLORS = {
   black: '#000000',
@@ -8,6 +8,7 @@ export const COLORS = {
   cobalt: '#0047ab',
   routeRed: '#d0021b',
   water: '#a9d8f2', // light baby blue
+  bustle: '#ee6b75', // the glow at its busiest
   selected: '#8a8a8a',
 }
 
@@ -34,14 +35,18 @@ export function boxOf(coordinates) {
   return [Math.min(...xs), Math.min(...zs), Math.max(...xs), Math.max(...zs)]
 }
 
+// Extra height kept free at the bottom of every view, so the timeline doesn't cover the map.
+const TIMELINE_ROOM = 0.2
+
 // Where the camera must sit to show a box with a margin around it, looking straight down
 // with north at the top.
 export function cameraFor(box, margin, aspect, fov) {
   const width = box[2] - box[0] + margin * 2
-  const height = box[3] - box[1] + margin * 2
+  const room = (box[3] - box[1] + margin * 2) * TIMELINE_ROOM
+  const height = box[3] - box[1] + margin * 2 + room
   const halfTan = Math.tan((fov * Math.PI) / 360)
   const distance = Math.max(height / (2 * halfTan), width / (2 * halfTan * aspect))
-  const center = [(box[0] + box[2]) / 2, (box[1] + box[3]) / 2]
+  const center = [(box[0] + box[2]) / 2, (box[1] + box[3] + room) / 2]
   return { target: [center[0], 0, center[1]], position: [center[0], distance, center[1] + distance * 0.001] }
 }
 
@@ -172,6 +177,62 @@ export function buildPoints(coordinates) {
       return [x, 0, z]
     }),
   )
+}
+
+// The ground around each social building: its footprint plus a band along its outline.
+function bustleAreaPositions(feature) {
+  const ring = feature.geometry.coordinates[0]
+  const footprint = new THREE.ShapeGeometry(new THREE.Shape(toShapePoints(ring))).toNonIndexed()
+  footprint.rotateX(-Math.PI / 2)
+  const positions = [...footprint.attributes.position.array]
+  const half = SOCIAL_REACH_M
+  const points = ring.map(toLocal)
+  points.slice(0, -1).forEach(([ax, az], index) => {
+    const [bx, bz] = points[index + 1]
+    const length = Math.hypot(bx - ax, bz - az) || 1
+    const nx = (-(bz - az) / length) * half
+    const nz = ((bx - ax) / length) * half
+    positions.push(ax + nx, 0, az + nz, bx + nx, 0, bz + nz, bx - nx, 0, bz - nz)
+    positions.push(ax + nx, 0, az + nz, bx - nx, 0, bz - nz, ax - nx, 0, az - nz)
+  })
+  points.forEach(([x, z]) => {
+    for (let i = 0; i < 12; i++) {
+      const a = (i / 12) * Math.PI * 2
+      const b = ((i + 1) / 12) * Math.PI * 2
+      positions.push(x, 0, z, x + Math.cos(b) * half, 0, z + Math.sin(b) * half, x + Math.cos(a) * half, 0, z + Math.sin(a) * half)
+    }
+  })
+  return positions
+}
+
+// One drawing for all the bustle areas, whose colours can change without rebuilding it.
+export function buildBustle(features, highlights) {
+  const parts = []
+  const positions = []
+  features.forEach((feature) => {
+    const highlight = highlights[String(feature.properties.id)]
+    if (!highlight) return
+    const start = positions.length / 3
+    positions.push(...bustleAreaPositions(feature))
+    parts.push({ start, end: positions.length / 3, activity: highlight.activity })
+  })
+  const geometry = lineGeometry(positions)
+  geometry.setAttribute('color', new THREE.BufferAttribute(new Float32Array(positions.length), 3))
+  return { geometry, parts }
+}
+
+// Fades each area from white, when quiet, toward the glow colour, when busiest.
+export function paintBustle({ geometry, parts }, hour) {
+  const peak = new THREE.Color(COLORS.bustle)
+  const colors = geometry.attributes.color
+  parts.forEach(({ start, end, activity }) => {
+    const level = activity[hour]
+    const r = 1 + (peak.r - 1) * level
+    const g = 1 + (peak.g - 1) * level
+    const b = 1 + (peak.b - 1) * level
+    for (let i = start; i < end; i++) colors.setXYZ(i, r, g, b)
+  })
+  colors.needsUpdate = true
 }
 
 export function distanceToLine([x, z], points) {

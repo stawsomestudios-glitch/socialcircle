@@ -5,6 +5,7 @@
 // Run with: node scripts/build-osm-highlights.mjs <raw Overpass JSON files>
 
 import { readFileSync, writeFileSync } from 'node:fs'
+import opening_hours from 'opening_hours'
 import { MAP_BOUNDARY } from '../src/map/places.js'
 
 const NEAREST_LIMIT_M = 15
@@ -15,6 +16,51 @@ const NOT_SOCIAL_SHOPS = new Set([
   'no', 'vacant', 'car', 'car_parts', 'car_repair', 'funeral_directors', 'hairdresser', 'beauty',
   'hearing_aids', 'locksmith', 'massage', 'tattoo', 'trade', 'travel_agency',
 ])
+
+// How busy each kind of place typically is, by hour, from 0 to 1. These are assumptions
+// about a normal day, not measurements: nothing in the data counts people.
+const RHYTHMS = {
+  cafe: { 8: 0.3, 9: 0.6, 10: 0.8, 11: 0.8, 12: 0.7, 13: 0.7, 14: 0.8, 15: 0.9, 16: 0.9, 17: 0.7, 18: 0.4, 19: 0.2 },
+  food: { 11: 0.4, 12: 0.9, 13: 0.9, 14: 0.5, 15: 0.2, 16: 0.2, 17: 0.4, 18: 0.8, 19: 1, 20: 1, 21: 0.8, 22: 0.5, 23: 0.2 },
+  bar: { 0: 0.8, 1: 0.5, 2: 0.2, 17: 0.2, 18: 0.4, 19: 0.6, 20: 0.8, 21: 1, 22: 1, 23: 1 },
+  mensa: { 8: 0.1, 9: 0.1, 10: 0.2, 11: 0.7, 12: 1, 13: 1, 14: 0.5, 15: 0.2 },
+  shop: { 9: 0.2, 10: 0.5, 11: 0.6, 12: 0.6, 13: 0.6, 14: 0.6, 15: 0.7, 16: 0.8, 17: 0.8, 18: 0.6, 19: 0.3 },
+  supermarket: { 7: 0.2, 8: 0.3, 9: 0.3, 10: 0.4, 11: 0.4, 12: 0.5, 13: 0.5, 14: 0.4, 15: 0.6, 16: 0.8, 17: 1, 18: 1, 19: 0.7, 20: 0.4, 21: 0.15 },
+  museum: { 10: 0.4, 11: 0.6, 12: 0.6, 13: 0.6, 14: 0.7, 15: 0.7, 16: 0.5, 17: 0.2 },
+  library: { 9: 0.4, 10: 0.7, 11: 0.8, 12: 0.8, 13: 0.8, 14: 0.9, 15: 0.9, 16: 0.9, 17: 0.8, 18: 0.6, 19: 0.4, 20: 0.2 },
+  bauhaus: { 8: 0.4, 9: 0.8, 10: 1, 11: 1, 12: 0.9, 13: 0.9, 14: 1, 15: 1, 16: 0.9, 17: 0.7, 18: 0.4, 19: 0.2, 20: 0.1 },
+}
+const OPEN_BUT_QUIET = 0.15 // for a place that's open at an hour its rhythm calls empty
+const TYPICAL_DAY = [2026, 10, 4] // a Wednesday in November that isn't a holiday: year, month from 0, day
+const HOURS = Array.from({ length: 24 }, (_, hour) => hour)
+
+const rhythmOf = (element, category) => {
+  const tags = element.tags ?? {}
+  if (/mensa/i.test(tags.name ?? '')) return RHYTHMS.mensa
+  if (['bar', 'pub', 'biergarten', 'nightclub'].includes(tags.amenity)) return RHYTHMS.bar
+  if (['supermarket', 'convenience'].includes(tags.shop)) return RHYTHMS.supermarket
+  return RHYTHMS[category]
+}
+
+// The place's rhythm, limited to the hours it's open where OpenStreetMap lists them.
+function activityOf(element, category) {
+  const rhythm = rhythmOf(element, category)
+  const fromRhythm = HOURS.map((hour) => rhythm[hour] ?? 0)
+  const listed = element.tags?.opening_hours
+  if (!listed) return fromRhythm
+  try {
+    const hours = new opening_hours(listed, { lat: 50.98, lon: 11.33, address: { country_code: 'de', state: 'Thüringen' } })
+    return HOURS.map((hour) => {
+      const moment = new Date(TYPICAL_DAY[0], TYPICAL_DAY[1], TYPICAL_DAY[2], hour, 30)
+      if (hours.getUnknown(moment)) return fromRhythm[hour]
+      return hours.getState(moment) ? Math.max(fromRhythm[hour], OPEN_BUT_QUIET) : 0
+    })
+  } catch {
+    unreadableHours++
+    return fromRhythm
+  }
+}
+let unreadableHours = 0
 
 const elementsById = new Map()
 for (const file of process.argv.slice(2)) {
@@ -113,8 +159,9 @@ for (const element of elements) {
   if (!category) continue
   const matches = matchBuildings(element)
   for (const { id } of matches) {
-    const entry = (highlights[id] ??= { categories: new Set(), names: new Set() })
+    const entry = (highlights[id] ??= { categories: new Set(), names: new Set(), curves: [] })
     entry.categories.add(category)
+    entry.curves.push(activityOf(element, category))
     if (element.tags.name) entry.names.add(element.tags.name)
   }
 }
@@ -122,13 +169,21 @@ for (const element of elements) {
 // The kit knows the main use of its buildings even where OpenStreetMap lists nothing.
 const KIT_USES = { retail: 'shop', food_and_drink: 'food' }
 for (const { id, use } of buildings) {
-  if (KIT_USES[use]) (highlights[id] ??= { categories: new Set(), names: new Set() }).categories.add(KIT_USES[use])
+  if (!KIT_USES[use]) continue
+  const entry = (highlights[id] ??= { categories: new Set(), names: new Set(), curves: [] })
+  entry.categories.add(KIT_USES[use])
+  if (!entry.curves.length) entry.curves.push(HOURS.map((hour) => RHYTHMS[KIT_USES[use]][hour] ?? 0))
 }
 
 const output = Object.fromEntries(
   Object.entries(highlights).map(([id, entry]) => [
     id,
-    { category: PRIORITY.find((c) => entry.categories.has(c)), names: [...entry.names] },
+    {
+      category: PRIORITY.find((c) => entry.categories.has(c)),
+      names: [...entry.names],
+      // A building with several places is as busy as its busiest one.
+      activity: HOURS.map((hour) => Math.max(...entry.curves.map((curve) => curve[hour]))),
+    },
   ]),
 )
 writeFileSync('public/osm/highlights.json', JSON.stringify(output))
@@ -136,3 +191,4 @@ writeFileSync('public/osm/highlights.json', JSON.stringify(output))
 const counts = {}
 Object.values(output).forEach(({ category }) => (counts[category] = (counts[category] ?? 0) + 1))
 console.log('buildings per category', counts)
+console.log('opening hours that could not be read', unreadableHours)
