@@ -7,8 +7,8 @@ body,
 body {
   margin: 0;
   font-family: system-ui, sans-serif;
-  background: #dde6ea;
-  color: #1c1c1c;
+  background: #fff;
+  color: #000;
 }
 
 .status {
@@ -16,10 +16,6 @@ body {
   max-width: 36rem;
   padding: 0 1rem;
   text-align: center;
-}
-
-.error {
-  color: #b42318;
 }
 
 .app {
@@ -37,29 +33,31 @@ body {
   overflow-y: auto;
   box-sizing: border-box;
   padding: 14px 16px;
-  background: rgba(255, 255, 255, 0.93);
-  border-radius: 8px;
-  box-shadow: 0 1px 8px rgba(0, 0, 0, 0.15);
+  background: #fff;
+  border: 2px solid #000;
   font-size: 13px;
   line-height: 1.4;
 }
 
+.panel h1,
+.panel h2 {
+  font-family: Righteous, sans-serif;
+  font-weight: 400;
+}
+
 .panel h1 {
-  margin: 0 0 4px;
-  font-size: 18px;
+  margin: 0 0 6px;
+  font-size: 26px;
+  line-height: 1.1;
 }
 
 .panel h2 {
   margin: 14px 0 6px;
-  font-size: 13px;
+  font-size: 15px;
 }
 
 .panel p {
   margin: 0 0 6px;
-}
-
-.hint {
-  color: #555;
 }
 
 .note {
@@ -67,22 +65,24 @@ body {
   font-size: 12px;
 }
 
+.buttons {
+  display: flex;
+  gap: 6px;
+}
+
 .panel button {
-  margin-top: 4px;
   padding: 6px 10px;
   font: inherit;
   cursor: pointer;
-  background: #1c1c1c;
+  background: #000;
   color: #fff;
   border: 0;
-  border-radius: 5px;
 }
 
 .info {
   margin-top: 12px;
   padding: 2px 10px 6px;
-  background: #fff6d1;
-  border-radius: 5px;
+  border: 1px solid #000;
 }
 
 .info h2 {
@@ -99,25 +99,51 @@ body {
   margin-top: 0;
 }
 
-.legend.columns {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  column-gap: 8px;
-}
-
 .legend li {
   display: flex;
-  align-items: center;
-  gap: 6px;
-  margin-bottom: 3px;
+  align-items: flex-start;
+  gap: 8px;
+  margin-bottom: 6px;
 }
 
-.swatch {
+.symbol {
   flex: none;
-  width: 12px;
+  box-sizing: border-box;
+  width: 18px;
   height: 12px;
-  border-radius: 2px;
-  outline: 1px solid rgba(0, 0, 0, 0.12);
+  margin-top: 3px;
+}
+
+.symbol.black {
+  background: #000;
+}
+
+.symbol.main {
+  background: #0047ab;
+}
+
+.symbol.outline {
+  border: 1px solid #000;
+}
+
+.symbol.border {
+  height: 3px;
+  margin-top: 8px;
+  background: #000;
+}
+
+.symbol.dots-most {
+  height: 6px;
+  margin-top: 6px;
+  background-image: radial-gradient(circle, #000 0 2px, transparent 2.5px);
+  background-size: 6px 6px;
+}
+
+.symbol.dots-least {
+  height: 9px;
+  margin-top: 4px;
+  background-image: radial-gradient(circle, transparent 0 2px, #000 2.5px 3.5px, transparent 4px);
+  background-size: 9px 9px;
 }
 
 .attribution {
@@ -126,8 +152,12 @@ body {
   bottom: 0;
   left: 0;
   padding: 4px 10px;
-  background: rgba(255, 255, 255, 0.85);
+  background: #fff;
+  border-top: 1px solid #000;
   font-size: 11px;
   line-height: 1.35;
-  color: #333;
+}
+
+.attribution a {
+  color: #000;
 }

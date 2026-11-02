@@ -5,6 +5,7 @@
 // Run with: node scripts/build-osm-highlights.mjs <raw Overpass JSON files>
 
 import { readFileSync, writeFileSync } from 'node:fs'
+import { MAP_BOUNDARY } from '../src/map/places.js'
 
 const NEAREST_LIMIT_M = 15
 const PRIORITY = ['museum', 'library', 'cafe', 'food', 'shop', 'bauhaus'] // when one building has several
@@ -15,7 +16,13 @@ const NOT_SOCIAL_SHOPS = new Set([
   'hearing_aids', 'locksmith', 'massage', 'tattoo', 'trade', 'travel_agency',
 ])
 
-const elements = process.argv.slice(2).flatMap((file) => JSON.parse(readFileSync(file, 'utf8')).elements)
+const elementsById = new Map()
+for (const file of process.argv.slice(2)) {
+  for (const element of JSON.parse(readFileSync(file, 'utf8')).elements) {
+    elementsById.set(`${element.type}/${element.id}`, element)
+  }
+}
+const elements = [...elementsById.values()]
 const buildings = [
   ...JSON.parse(readFileSync('public/data/buildings.geojson', 'utf8')).features,
   ...JSON.parse(readFileSync('public/osm/context.geojson', 'utf8')).features.filter(
@@ -24,7 +31,9 @@ const buildings = [
 ].map((feature) => {
   const ring = feature.geometry.coordinates[0]
   return { id: String(feature.properties.id), use: feature.properties.use, ring, middle: centroid(ring) }
-})
+}).filter(({ middle: [lon, lat] }) =>
+  lon >= MAP_BOUNDARY[0] && lon <= MAP_BOUNDARY[2] && lat >= MAP_BOUNDARY[1] && lat <= MAP_BOUNDARY[3],
+)
 
 function centroid(ring) {
   const sum = ring.reduce((total, point) => [total[0] + point[0], total[1] + point[1]], [0, 0])
@@ -99,12 +108,10 @@ function matchBuildings(element) {
 }
 
 const highlights = {}
-const unmatched = []
 for (const element of elements) {
   const category = categoryOf(element)
   if (!category) continue
   const matches = matchBuildings(element)
-  if (!matches.length) unmatched.push(`${category}: ${element.tags.name ?? element.id}`)
   for (const { id } of matches) {
     const entry = (highlights[id] ??= { categories: new Set(), names: new Set() })
     entry.categories.add(category)
@@ -129,4 +136,3 @@ writeFileSync('public/osm/highlights.json', JSON.stringify(output))
 const counts = {}
 Object.values(output).forEach(({ category }) => (counts[category] = (counts[category] ?? 0) + 1))
 console.log('buildings per category', counts)
-console.log('not matched to a building', unmatched)

@@ -1,30 +1,25 @@
 // Turns a raw OpenStreetMap download into public/osm/context.geojson: the surroundings
 // of the city kit. Everything the kit already covers is left out, so the kit stays the
-// source inside its own area. The query is in public/osm/SOURCES.md.
+// source inside its own area, and only what falls inside the map is kept. The queries are
+// in public/osm/SOURCES.md.
 //
 // Run with: node scripts/build-osm-context.mjs <raw Overpass JSON files>
 
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { MAP_BOUNDARY } from '../src/map/places.js'
 
-const BBOX = [11.305, 50.965, 11.346, 50.9925] // west, south, east, north, as downloaded
 const EDGE_MARGIN_M = 40 // the kit misses buildings this close to its edge, so OSM may fill them
 const SMALL_BUILDINGS = new Set(['garage', 'garages', 'shed', 'hut', 'carport', 'garden_house', 'greenhouse', 'roof'])
-const LAND_TYPES = {
-  park: 'recreation',
-  garden: 'recreation',
-  pitch: 'recreation',
-  grass: 'recreation',
-  meadow: 'recreation',
-  forest: 'recreation',
-  wood: 'recreation',
-  recreation_ground: 'recreation',
-  village_green: 'recreation',
-  allotments: 'recreation',
-  cemetery: 'cemetery',
-  water: 'flowing water',
-}
 
-const elements = process.argv.slice(2).flatMap((file) => JSON.parse(readFileSync(file, 'utf8')).elements)
+const elementsById = new Map()
+for (const file of process.argv.slice(2)) {
+  for (const element of JSON.parse(readFileSync(file, 'utf8')).elements) {
+    const key = `${element.type}/${element.id}`
+    // A relation may arrive without its outline from one download and with it from another.
+    if (!elementsById.get(key)?.members?.length) elementsById.set(key, element)
+  }
+}
+const elements = [...elementsById.values()]
 const kit = JSON.parse(readFileSync('public/data/kit.json', 'utf8'))
 const kitBuildings = JSON.parse(readFileSync('public/data/buildings.geojson', 'utf8')).features.map(
   (feature) => feature.geometry.coordinates[0],
@@ -39,6 +34,8 @@ const toLine = (geometry) => geometry.map((point) => round([point.lon, point.lat
 const same = (a, b) => a[0] === b[0] && a[1] === b[1]
 const isClosed = (line) => line.length >= 4 && same(line[0], line.at(-1))
 const inKit = ([lon, lat]) => lon >= west && lon <= east && lat >= south && lat <= north
+const inMap = ([lon, lat]) =>
+  lon >= MAP_BOUNDARY[0] && lon <= MAP_BOUNDARY[2] && lat >= MAP_BOUNDARY[1] && lat <= MAP_BOUNDARY[3]
 
 function centroid(ring) {
   const sum = ring.reduce((total, point) => [total[0] + point[0], total[1] + point[1]], [0, 0])
@@ -115,12 +112,12 @@ function heightOf(tags) {
 }
 
 const features = []
-const counts = { building: 0, land: 0, road: 0, waterway: 0, skipped_without_outline: 0 }
+const counts = { building: 0, road: 0, waterway: 0 }
 
 function addLines(element, kind) {
   let run = []
   const flush = () => {
-    if (run.length >= 2) {
+    if (run.length >= 2 && run.some(inMap)) {
       features.push({ type: 'Feature', properties: { kind }, geometry: { type: 'LineString', coordinates: run } })
       counts[kind]++
     }
@@ -129,7 +126,7 @@ function addLines(element, kind) {
   const line = toLine(element.geometry ?? [])
   line.forEach((point, index) => {
     const next = line[index + 1]
-    if (next && !(inKit(point) && inKit(next))) {
+    if (next && (kind === 'waterway' || !(inKit(point) && inKit(next)))) {
       if (!run.length) run.push(point)
       run.push(next)
     } else if (run.length) {
@@ -145,9 +142,9 @@ for (const element of elements) {
   if (tags.building && tags.building !== 'no') {
     if (tags.location === 'underground' || Number(tags.layer) < 0) continue
     const polygons = polygonsOf(element)
-    if (!polygons.length) counts.skipped_without_outline++
     polygons.forEach((rings) => {
       const middle = centroid(rings[0])
+      if (!inMap(middle)) return
       if (inKit(middle) && metresInsideKit(middle) > EDGE_MARGIN_M) return
       if (overlapsKitBuilding(rings[0])) return
       const street = [tags['addr:street'], tags['addr:housenumber']].filter(Boolean).join(' ')
@@ -170,25 +167,14 @@ for (const element of elements) {
     if (tags.tunnel === 'yes' || tags.highway === 'proposed' || tags.highway === 'construction') continue
     addLines(element, 'road')
   } else if (tags.waterway) {
+    if (tags.tunnel) continue // underground, so not part of the plan
     addLines(element, 'waterway')
-  } else {
-    const landuse = LAND_TYPES[tags.leisure] ?? LAND_TYPES[tags.landuse] ?? LAND_TYPES[tags.natural]
-    if (!landuse) continue
-    polygonsOf(element).forEach((rings) => {
-      if (rings[0].every(inKit)) return
-      features.push({
-        type: 'Feature',
-        properties: { kind: 'land', landuse },
-        geometry: { type: 'Polygon', coordinates: rings },
-      })
-      counts.land++
-    })
   }
 }
 
 mkdirSync('public/osm', { recursive: true })
 writeFileSync(
   'public/osm/context.geojson',
-  JSON.stringify({ type: 'FeatureCollection', bbox: BBOX, features }),
+  JSON.stringify({ type: 'FeatureCollection', features }),
 )
 console.log(counts)

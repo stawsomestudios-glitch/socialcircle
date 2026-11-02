@@ -1,16 +1,15 @@
 # Surroundings from OpenStreetMap
 
-`context.geojson` holds the area around the city kit: buildings, roads, water and green space. It leaves out what the kit already covers. Don't edit it by hand; `scripts/build-osm-context.mjs` makes it from a raw download.
+`context.geojson` holds the parts of the map outside the city kit: buildings, roads and water, inside the boundary in `src/map/places.js`. It leaves out what the kit already covers. Don't edit it by hand; `scripts/build-osm-context.mjs` makes it from a raw download.
 
 Downloaded 2026-11-02 from the Overpass API. Licence: Open Database License (ODbL), © OpenStreetMap contributors, https://www.openstreetmap.org/copyright.
 
-Bounding box, west, south, east, north: 11.305, 50.965, 11.346, 50.9925.
+Downloaded area, west, south, east, north: 11.305, 50.958, 11.346, 50.9925. The map uses a smaller area inside it.
 
 ## Fields
 
-- `kind`: `building`, `land`, `road` or `waterway`.
+- `kind`: `building`, `road` or `waterway`.
 - Buildings: `id`, optional `name`, `address` and `floors`, `height` in metres and `height_estimated`.
-- Land: `landuse`, one of `recreation`, `cemetery`, `flowing water`.
 
 ## How to read it
 
@@ -53,5 +52,44 @@ out geom;
 ```
 [out:json][timeout:120][bbox:50.9650,11.3050,50.9925,11.3460];
 (nwr["amenity"~"^(restaurant|fast_food|bar|pub|biergarten|nightclub|food_court|ice_cream)$"];nwr["shop"];);
+out geom;
+```
+
+The strip south of 50.965 came from one more query, 2026-11-02:
+
+```
+[out:json][timeout:150][bbox:50.9580,11.3180,50.9655,11.3460];
+(way["building"];relation["building"];way["highway"];
+ nwr["amenity"~"^(cafe|library|university|college|restaurant|fast_food|bar|pub|biergarten|nightclub|food_court|ice_cream)$"];
+ nwr["tourism"="museum"];nwr["shop"];way["waterway"];);
+out geom;
+```
+
+## `routes.json`
+
+The most and least social walking routes from a general point on Merketalstraße to the Bauhaus main building, made by `scripts/build-routes.mjs`.
+
+- The network is every OpenStreetMap path and street inside the map that people may walk on. Private ways and motorways are left out.
+- A stretch counts as social where it lies within 25 m of a social building's outline, the same areas the map draws.
+- Neither route may be longer than 1.6 times the shortest walk. Without a limit, the most social route could wander forever.
+- Walking speed is 4.8 km/h, which is 80 m per minute.
+- `places_passed` counts social buildings whose area a route's points touch. It says the route goes near them, not that anyone is there.
+
+Each route ends on the path closest to the building's outline, because the data doesn't show where its doors are.
+
+## `city.json`
+
+The rest of the city, made by `scripts/build-city.mjs`:
+
+- `boundary`: the administrative boundary of the city of Weimar, as rings of longitude and latitude.
+- `buildings`: the outline of every building inside the city but outside the black map area. These have no heights or names.
+- `river`: the Ilm inside the city.
+
+Downloaded 2026-11-02 from the Overpass API, same licence:
+
+```
+[out:json][timeout:220];
+area["boundary"="administrative"]["name"="Weimar"]["admin_level"="6"]->.w;
+(rel(pivot.w);way["building"](area.w);way["waterway"="river"](area.w););
 out geom;
 ```

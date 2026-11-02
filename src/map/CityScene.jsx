@@ -1,43 +1,61 @@
-import { useEffect, useMemo, useRef } from 'react'
-import { Canvas } from '@react-three/fiber'
-import { OrbitControls } from '@react-three/drei'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { Canvas, useThree } from '@react-three/fiber'
+import { Line, OrbitControls } from '@react-three/drei'
 import * as THREE from 'three'
-import { M18_AREA, MAIN_BUILDING } from './places.js'
+import { TITLES } from './places.js'
 import {
-  M18_COLOR,
-  GLOW_COLOR,
-  WATER_LINE_COLOR,
+  AREA_BOX,
+  COLORS,
+  EDGE_PLANES,
+  boxOf,
   buildCity,
-  buildGlow,
-  buildLand,
-  buildStreets,
+  buildDots,
+  buildLines,
+  buildOutlineIndex,
+  cameraFor,
+  distanceToLine,
   extrudeBuilding,
   findBuilding,
-  labelPosition,
+  flatFootprint,
+  routeMiddle,
+  isInsideMap,
+  placeOf,
+  titlePosition,
   toLocal,
 } from './cityGeometry.js'
 
-// Starts south of the campus, looking north, so north is at the top of the screen.
-const START_CAMERA = [-170, 300, 520]
-export const GLOW_REACH_M = 25
+const FOV = 40
+const CLICK_MARGIN_M = 1000 // how much area to show around whatever you click
+const CITY_MARGIN_M = 1000
+const AREA_MARGIN_M = 150
+// The social route is solid dots, the antisocial route open rings.
+const ROUTE_STYLES = {
+  most: { open: false, size: 5, spacing: 13, start: 0 },
+  least: { open: true, size: 9, spacing: 22, start: 11 },
+}
+const ROUTE_CLICK_PX = 10 // a click this close to a route counts as clicking it
+const FLIGHT_MS = 1100
 
-// A text label drawn on a small picture that always faces the camera and keeps its size.
-function Label({ position, children }) {
+const allPoints = (rings) => rings.flat()
+
+// A title on a small white plate that always faces the camera and keeps its size.
+function Title({ position, anchor, children }) {
   const { texture, scale } = useMemo(() => {
     const canvas = document.createElement('canvas')
     const context = canvas.getContext('2d')
-    const font = '600 36px system-ui, sans-serif'
+    const font = '40px Righteous, sans-serif'
     context.font = font
-    canvas.width = Math.ceil(context.measureText(children).width) + 40
-    canvas.height = 60
+    canvas.width = Math.ceil(context.measureText(children).width) + 36
+    canvas.height = 64
     context.font = font
-    context.fillStyle = 'rgba(28, 28, 28, 0.88)'
-    context.beginPath()
-    context.roundRect(0, 0, canvas.width, canvas.height, 10)
-    context.fill()
-    context.fillStyle = '#fff'
+    context.fillStyle = COLORS.white
+    context.fillRect(0, 0, canvas.width, canvas.height)
+    context.strokeStyle = COLORS.black
+    context.lineWidth = 4
+    context.strokeRect(2, 2, canvas.width - 4, canvas.height - 4)
+    context.fillStyle = COLORS.black
     context.textBaseline = 'middle'
-    context.fillText(children, 20, 32)
+    context.fillText(children, 18, 34)
     const texture = new THREE.CanvasTexture(canvas)
     texture.colorSpace = THREE.SRGBColorSpace
     const height = 0.021
@@ -45,116 +63,187 @@ function Label({ position, children }) {
   }, [children])
 
   return (
-    <sprite position={position} scale={scale} renderOrder={10}>
+    <sprite position={position} scale={scale} center={anchor} renderOrder={10}>
       <spriteMaterial map={texture} sizeAttenuation={false} depthTest={false} transparent />
     </sprite>
   )
 }
 
-function City({ data, selected, onSelect }) {
-  const context = useMemo(() => {
-    const ofKind = (kind) => data.context.features.filter((f) => f.properties.kind === kind)
-    return {
-      buildings: ofKind('building'),
-      land: buildLand(ofKind('land')),
-      roads: buildStreets(ofKind('road')),
-      waterways: buildStreets(ofKind('waterway')),
+// One black dot, either solid or an open ring, that the route is drawn with.
+function useDotTexture(open) {
+  return useMemo(() => {
+    const canvas = document.createElement('canvas')
+    canvas.width = 64
+    canvas.height = 64
+    const context = canvas.getContext('2d')
+    context.beginPath()
+    if (open) {
+      context.lineWidth = 14
+      context.strokeStyle = COLORS.white
+      context.arc(32, 32, 24, 0, Math.PI * 2)
+      context.stroke()
+    } else {
+      context.fillStyle = COLORS.white
+      context.arc(32, 32, 30, 0, Math.PI * 2)
+      context.fill()
     }
+    return new THREE.CanvasTexture(canvas)
+  }, [open])
+}
+
+function RouteDots({ coordinates, style, selected }) {
+  const dotTexture = useDotTexture(style.open)
+  const geometry = useMemo(() => buildDots(coordinates, style.spacing, style.start), [coordinates, style])
+  return (
+    <points geometry={geometry} position={[0, 1, 0]} renderOrder={5}>
+      <pointsMaterial
+        color={COLORS.black}
+        map={dotTexture}
+        alphaTest={0.5}
+        size={style.size * (selected ? 1.6 : 1)}
+        sizeAttenuation={false}
+        depthTest={false}
+      />
+    </points>
+  )
+}
+
+// Glides the camera to a new view. Grabbing the map stops the glide.
+function CameraFlight({ flight }) {
+  const camera = useThree((state) => state.camera)
+  const controls = useThree((state) => state.controls)
+  const invalidate = useThree((state) => state.invalidate)
+  const size = useThree((state) => state.size)
+
+  useEffect(() => {
+    if (!flight || !controls) return undefined
+    const goal = cameraFor(flight.box, flight.margin, size.width / size.height, FOV)
+    const fromPosition = camera.position.clone()
+    const fromTarget = controls.target.clone()
+    const toPosition = new THREE.Vector3(...goal.position)
+    const toTarget = new THREE.Vector3(...goal.target)
+    const instant = window.matchMedia('(prefers-reduced-motion: reduce)').matches
+    const started = performance.now()
+    let frame = null
+
+    const step = (now) => {
+      const progress = instant ? 1 : Math.min(1, (now - started) / FLIGHT_MS)
+      const eased = progress * progress * (3 - 2 * progress)
+      camera.position.lerpVectors(fromPosition, toPosition, eased)
+      controls.target.lerpVectors(fromTarget, toTarget, eased)
+      controls.update()
+      invalidate()
+      if (progress < 1) frame = requestAnimationFrame(step)
+    }
+    const stop = () => cancelAnimationFrame(frame)
+    frame = requestAnimationFrame(step)
+    controls.addEventListener('start', stop)
+    return () => {
+      stop()
+      controls.removeEventListener('start', stop)
+    }
+  }, [flight, controls, camera, invalidate, size])
+
+  return null
+}
+
+function City({ data, selected, onSelect, flyTo }) {
+  const buildings = useMemo(() => {
+    const outside = data.context.features.filter((f) => f.properties.kind === 'building')
+    return [...data.buildings.features, ...outside].filter(isInsideMap)
   }, [data])
-  const city = useMemo(
-    () => buildCity([...data.buildings.features, ...context.buildings], data.highlights),
-    [data, context],
-  )
-  const land = useMemo(() => buildLand(data.plots.features), [data])
-  const glow = useMemo(
-    () => buildGlow([...data.buildings.features, ...context.buildings], data.highlights, GLOW_REACH_M),
-    [data, context],
-  )
-  const streets = useMemo(() => buildStreets(data.streets.features), [data])
-  const selectedGeometry = useMemo(() => (selected ? extrudeBuilding(selected) : null), [selected])
-  const mainLabel = useMemo(
-    () => labelPosition(data.buildings.features, MAIN_BUILDING.buildingIds[0]),
+  const city = useMemo(() => buildCity(buildings), [buildings])
+  const outlines = useMemo(() => buildLines(data.city.buildings), [data])
+  const findOutline = useMemo(() => buildOutlineIndex(data.city.buildings), [data])
+  const streams = useMemo(
+    () => buildLines(data.context.features.filter((f) => f.properties.kind === 'waterway').map((f) => f.geometry.coordinates)),
     [data],
   )
-  const sunTarget = useMemo(() => new THREE.Object3D(), [])
+  const river = useMemo(() => buildLines(data.city.river), [data])
+  const boundary = useMemo(
+    () => data.city.boundary.map((ring) => ring.map((point) => {
+      const [x, z] = toLocal(point)
+      return [x, 0.5, z]
+    })),
+    [data],
+  )
+  const routeLines = useMemo(
+    () => ({
+      most: data.routes.most.coordinates.map(toLocal),
+      least: data.routes.least.coordinates.map(toLocal),
+    }),
+    [data],
+  )
 
-  const [west, south, east, north] = data.kit.bbox
-  const [x0, z0] = toLocal([west, north])
-  const [x1, z1] = toLocal([east, south])
-  const center = [(x0 + x1) / 2, (z0 + z1) / 2]
-  const size = [x1 - x0, z1 - z0]
+  const selectedShape = useMemo(() => {
+    if (selected?.kind === 'building') return extrudeBuilding(selected.feature)
+    if (selected?.kind === 'outline') return flatFootprint(selected.ring)
+    return null
+  }, [selected])
 
-  const [outerWest, outerSouth, outerEast, outerNorth] = data.context.bbox
-  const [ox0, oz0] = toLocal([outerWest, outerNorth])
-  const [ox1, oz1] = toLocal([outerEast, outerSouth])
-  const outerCenter = [(ox0 + ox1) / 2, (oz0 + oz1) / 2]
-  const outerSize = [ox1 - ox0, oz1 - oz0]
-  const [m18x, m18z] = toLocal(M18_AREA.center)
+  // A route under the pointer wins over most buildings, because it is so much thinner.
+  function pick(event, feature) {
+    if (event.delta > 4) return
+    event.stopPropagation()
+    const point = [event.point.x, event.point.z]
+    const perPixel =
+      (2 * Math.tan((FOV * Math.PI) / 360) * event.camera.position.distanceTo(event.point)) /
+      event.nativeEvent.target.clientHeight
+    const near = Object.entries(routeLines)
+      .map(([key, line]) => ({ key, distance: distanceToLine(point, line) }))
+      .sort((a, b) => a.distance - b.distance)[0]
+
+    const onMarkedBuilding = feature && placeOf(feature) // the routes end at this building
+
+    if (!onMarkedBuilding && near.distance <= ROUTE_CLICK_PX * perPixel) {
+      onSelect({ kind: 'route', key: near.key })
+      flyTo(boxOf(data.routes[near.key].coordinates), CLICK_MARGIN_M)
+    } else if (feature) {
+      onSelect({ kind: 'building', feature })
+      flyTo(boxOf(feature.geometry.coordinates[0]), CLICK_MARGIN_M)
+    } else {
+      const ring = findOutline(point)
+      if (ring) {
+        onSelect({ kind: 'outline', ring })
+        flyTo(boxOf(ring), CLICK_MARGIN_M)
+      } else {
+        onSelect(null)
+      }
+    }
+  }
 
   return (
     <>
-      <ambientLight intensity={1.05} />
-      <primitive object={sunTarget} position={[outerCenter[0], 0, outerCenter[1]]} />
-      <directionalLight
-        castShadow
-        intensity={1.9}
-        position={[outerCenter[0] - 700, 1300, outerCenter[1] + 650]}
-        target={sunTarget}
-        shadow-mapSize={[4096, 4096]}
-        shadow-camera-left={-2100}
-        shadow-camera-right={2100}
-        shadow-camera-top={2100}
-        shadow-camera-bottom={-2100}
-        shadow-camera-far={4500}
-        shadow-normalBias={0.6}
-      />
+      {/* An invisible sheet that catches clicks on the outlines and on the routes. */}
+      <mesh rotation={[-Math.PI / 2, 0, 0]} onClick={(event) => pick(event, null)}>
+        <planeGeometry args={[200000, 200000]} />
+        <meshBasicMaterial colorWrite={false} depthWrite={false} />
+      </mesh>
 
-      <mesh rotation={[-Math.PI / 2, 0, 0]} position={[outerCenter[0], -0.9, outerCenter[1]]} receiveShadow>
-        <planeGeometry args={outerSize} />
-        <meshStandardMaterial color="#efece3" />
-      </mesh>
-      <mesh geometry={context.land} position={[0, -0.6, 0]} receiveShadow>
-        <meshStandardMaterial vertexColors />
-      </mesh>
-      <lineSegments geometry={context.roads} position={[0, -0.3, 0]}>
-        <lineBasicMaterial color="#b9b5ab" />
+      {boundary.map((points, index) => (
+        <Line key={index} points={points} color={COLORS.black} lineWidth={2.5} />
+      ))}
+      <lineSegments geometry={outlines} position={[0, 0.2, 0]}>
+        <lineBasicMaterial color={COLORS.black} />
       </lineSegments>
-      <lineSegments geometry={context.waterways} position={[0, -0.3, 0]}>
-        <lineBasicMaterial color={WATER_LINE_COLOR} />
+      <lineSegments geometry={river} position={[0, 0.2, 0]}>
+        <lineBasicMaterial color={COLORS.black} />
       </lineSegments>
-
-      <mesh rotation={[-Math.PI / 2, 0, 0]} position={[center[0], 0, center[1]]} receiveShadow>
-        <planeGeometry args={size} />
-        <meshStandardMaterial color="#efece3" />
-      </mesh>
-      <mesh geometry={land} position={[0, 0.3, 0]} receiveShadow>
-        <meshStandardMaterial vertexColors />
-      </mesh>
-      <lineSegments geometry={streets} position={[0, 0.6, 0]}>
-        <lineBasicMaterial color="#9b978e" />
+      <lineSegments geometry={streams} position={[0, 0.2, 0]}>
+        <lineBasicMaterial color={COLORS.black} clippingPlanes={EDGE_PLANES} />
       </lineSegments>
-
-      <mesh geometry={glow} position={[0, 0.8, 0]} renderOrder={1}>
-        <meshBasicMaterial color={GLOW_COLOR} transparent opacity={0.13} depthWrite={false} />
-      </mesh>
 
       <mesh
         geometry={city.geometry}
-        castShadow
-        receiveShadow
-        onClick={(event) => {
-          if (event.delta > 4) return
-          event.stopPropagation()
-          onSelect(findBuilding(city.ranges, event.faceIndex))
-        }}
+        onClick={(event) => pick(event, findBuilding(city.ranges, event.faceIndex))}
       >
-        <meshStandardMaterial vertexColors />
+        <meshBasicMaterial vertexColors />
       </mesh>
 
-      {selectedGeometry && (
-        <mesh geometry={selectedGeometry}>
-          <meshStandardMaterial
-            color="#2b2b2b"
+      {selectedShape && (
+        <mesh geometry={selectedShape} position={[0, selected.kind === 'outline' ? 0.4 : 0, 0]}>
+          <meshBasicMaterial
+            color={COLORS.selected}
             polygonOffset
             polygonOffsetFactor={-2}
             polygonOffsetUnits={-2}
@@ -162,42 +251,70 @@ function City({ data, selected, onSelect }) {
         </mesh>
       )}
 
-      <mesh rotation={[-Math.PI / 2, 0, 0]} position={[m18x, 0.9, m18z]}>
-        <ringGeometry args={[M18_AREA.radius - 1.5, M18_AREA.radius, 96]} />
-        <meshBasicMaterial color={M18_COLOR} />
-      </mesh>
+      {Object.entries(ROUTE_STYLES).map(([key, style]) => (
+        <RouteDots
+          key={key}
+          coordinates={data.routes[key].coordinates}
+          style={style}
+          selected={selected?.kind === 'route' && selected.key === key}
+        />
+      ))}
+      <Title position={routeMiddle(data.routes.most.coordinates)} anchor={[-0.08, 0.5]}>
+        SOCIAL
+      </Title>
+      <Title position={routeMiddle(data.routes.least.coordinates)} anchor={[1.05, 0.5]}>
+        ANTISOCIAL
+      </Title>
 
-      <Label position={mainLabel}>{MAIN_BUILDING.label}</Label>
-      <Label position={[m18x, 28, m18z]}>{M18_AREA.label}</Label>
+      {TITLES.map((title) => (
+        <Title key={title.text} position={titlePosition(buildings, title)} anchor={title.anchor}>
+          {title.text}
+        </Title>
+      ))}
     </>
   )
 }
 
-export default function CityScene({ data, selected, onSelect, resetSignal }) {
-  const controls = useRef()
+export default function CityScene({ data, selected, onSelect, viewRequest }) {
+  const [flight, setFlight] = useState(null)
+  const cityBox = useMemo(() => boxOf(allPoints(data.city.boundary)), [data])
+  const start = useRef(cameraFor(cityBox, CITY_MARGIN_M, window.innerWidth / window.innerHeight, FOV))
 
   useEffect(() => {
-    if (resetSignal) controls.current?.reset()
-  }, [resetSignal])
+    if (!viewRequest) return
+    setFlight(
+      viewRequest.name === 'area'
+        ? { box: AREA_BOX, margin: AREA_MARGIN_M }
+        : { box: cityBox, margin: CITY_MARGIN_M },
+    )
+  }, [viewRequest, cityBox])
 
   return (
     <Canvas
-      shadows="percentage"
+      flat
       frameloop="demand"
-      camera={{ position: START_CAMERA, fov: 40, near: 5, far: 9000 }}
+      camera={{ position: start.current.position, fov: FOV, near: 20, far: 80000 }}
+      onCreated={({ gl }) => {
+        gl.localClippingEnabled = true
+      }}
       onPointerMissed={() => onSelect(null)}
     >
-      <color attach="background" args={['#dde6ea']} />
-      <City data={data} selected={selected} onSelect={onSelect} />
+      <color attach="background" args={[COLORS.white]} />
+      <City
+        data={data}
+        selected={selected}
+        onSelect={onSelect}
+        flyTo={(box, margin) => setFlight({ box, margin })}
+      />
       <OrbitControls
-        ref={controls}
         makeDefault
-        target={[0, 0, 0]}
+        target={start.current.target}
         screenSpacePanning={false}
         maxPolarAngle={Math.PI / 2 - 0.05}
         minDistance={40}
-        maxDistance={4500}
+        maxDistance={40000}
       />
+      <CameraFlight flight={flight} />
     </Canvas>
   )
 }
