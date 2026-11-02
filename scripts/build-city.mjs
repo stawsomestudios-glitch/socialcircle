@@ -1,5 +1,5 @@
-// Writes public/osm/city.json: the boundary of the city of Weimar, the outlines of every
-// building in the city outside the black map area, and the river. The query is in
+// Writes public/osm/city.json: the boundary of the city of Weimar and the outlines of every
+// building in the city outside the black map area. The query is in
 // public/osm/SOURCES.md.
 //
 // Run with: node scripts/build-city.mjs <raw Overpass JSON>
@@ -58,7 +58,6 @@ const [west, south, east, north] = MAP_BOUNDARY
 const inMap = ([lon, lat]) => lon >= west && lon <= east && lat >= south && lat <= north
 
 const buildings = []
-const river = []
 for (const element of elements) {
   const tags = element.tags ?? {}
   if (element.type !== 'way') continue
@@ -68,18 +67,8 @@ for (const element of elements) {
     if (ring.length < 4 || !same(ring[0], ring.at(-1))) continue
     const middle = centroid(ring)
     if (!inMap(middle) && inCity(middle)) buildings.push(ring)
-  } else if (tags.waterway === 'river' && !tags.tunnel) {
-    let run = []
-    for (const point of toLine(element.geometry)) {
-      if (inCity(point)) run.push(point)
-      else {
-        if (run.length >= 2) river.push(run)
-        run = []
-      }
-    }
-    if (run.length >= 2) river.push(run)
   }
 }
 
-writeFileSync('public/osm/city.json', JSON.stringify({ boundary, buildings, river }))
-console.log({ boundary_rings: boundary.length, boundary_points: boundary.flat().length, outlined_buildings: buildings.length, river_lines: river.length })
+writeFileSync('public/osm/city.json', JSON.stringify({ boundary, buildings }))
+console.log({ boundary_rings: boundary.length, boundary_points: boundary.flat().length, outlined_buildings: buildings.length })

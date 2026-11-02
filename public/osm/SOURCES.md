@@ -83,13 +83,33 @@ The rest of the city, made by `scripts/build-city.mjs`:
 
 - `boundary`: the administrative boundary of the city of Weimar, as rings of longitude and latitude.
 - `buildings`: the outline of every building inside the city but outside the black map area. These have no heights or names.
-- `river`: the Ilm inside the city.
 
 Downloaded 2026-11-02 from the Overpass API, same licence:
 
 ```
 [out:json][timeout:220];
 area["boundary"="administrative"]["name"="Weimar"]["admin_level"="6"]->.w;
-(rel(pivot.w);way["building"](area.w);way["waterway"="river"](area.w););
+(rel(pivot.w);way["building"](area.w););
+out geom;
+```
+
+## `water.json`
+
+All the water in the city that OpenStreetMap lists above ground, made by `scripts/build-water.mjs`:
+
+- `areas`: ponds, lakes, reservoirs, basins and fountains with an outline, as an outline and any islands.
+- `rivers`: the Ilm.
+- `streams`: streams, ditches, drains, canals, weirs and fish passes.
+- `points`: springs, wells, drinking water and fountains marked as a single point.
+
+Water running underground is left out. Downloaded 2026-11-02 from the Overpass API, same licence:
+
+```
+[out:json][timeout:180];
+area["boundary"="administrative"]["name"="Weimar"]["admin_level"="6"]->.w;
+(way["natural"="water"](area.w);relation["natural"="water"](area.w);
+ way["landuse"~"^(reservoir|basin)$"](area.w);way["waterway"](area.w);
+ node["natural"="spring"](area.w);nwr["amenity"~"^(fountain|drinking_water)$"](area.w);
+ nwr["man_made"="water_well"](area.w););
 out geom;
 ```

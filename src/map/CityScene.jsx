@@ -6,12 +6,12 @@ import { TITLES } from './places.js'
 import {
   AREA_BOX,
   COLORS,
-  EDGE_PLANES,
   boxOf,
   buildCity,
-  buildDots,
   buildLines,
   buildOutlineIndex,
+  buildPoints,
+  buildWaterAreas,
   cameraFor,
   distanceToLine,
   extrudeBuilding,
@@ -19,6 +19,7 @@ import {
   flatFootprint,
   routeMiddle,
   isInsideMap,
+  linesToPairs,
   placeOf,
   titlePosition,
   toLocal,
@@ -28,11 +29,11 @@ const FOV = 40
 const CLICK_MARGIN_M = 1000 // how much area to show around whatever you click
 const CITY_MARGIN_M = 1000
 const AREA_MARGIN_M = 150
-// The social route is solid dots, the antisocial route open rings.
-const ROUTE_STYLES = {
-  most: { open: false, size: 5, spacing: 13, start: 0 },
-  least: { open: true, size: 9, spacing: 22, start: 11 },
-}
+// Both routes are red lines, told apart by thickness, in screen pixels.
+const ROUTE_WIDTHS_PX = { most: 6, least: 2 }
+const RIVER_WIDTH_PX = 3
+const STREAM_WIDTH_PX = 1.5
+const WATER_POINT_PX = 6
 const ROUTE_CLICK_PX = 10 // a click this close to a route counts as clicking it
 const FLIGHT_MS = 1100
 
@@ -69,42 +70,42 @@ function Title({ position, anchor, children }) {
   )
 }
 
-// One black dot, either solid or an open ring, that the route is drawn with.
-function useDotTexture(open) {
-  return useMemo(() => {
+// Everything with water, drawn first so the buildings and outlines sit on top of it.
+function Water({ water }) {
+  const areas = useMemo(() => buildWaterAreas(water.areas), [water])
+  const rivers = useMemo(() => linesToPairs(water.rivers, 0.1), [water])
+  const streams = useMemo(() => linesToPairs(water.streams, 0.1), [water])
+  const points = useMemo(() => buildPoints(water.points), [water])
+  const dot = useMemo(() => {
     const canvas = document.createElement('canvas')
     canvas.width = 64
     canvas.height = 64
     const context = canvas.getContext('2d')
+    context.fillStyle = COLORS.white
     context.beginPath()
-    if (open) {
-      context.lineWidth = 14
-      context.strokeStyle = COLORS.white
-      context.arc(32, 32, 24, 0, Math.PI * 2)
-      context.stroke()
-    } else {
-      context.fillStyle = COLORS.white
-      context.arc(32, 32, 30, 0, Math.PI * 2)
-      context.fill()
-    }
+    context.arc(32, 32, 30, 0, Math.PI * 2)
+    context.fill()
     return new THREE.CanvasTexture(canvas)
-  }, [open])
-}
+  }, [])
 
-function RouteDots({ coordinates, style, selected }) {
-  const dotTexture = useDotTexture(style.open)
-  const geometry = useMemo(() => buildDots(coordinates, style.spacing, style.start), [coordinates, style])
   return (
-    <points geometry={geometry} position={[0, 1, 0]} renderOrder={5}>
-      <pointsMaterial
-        color={COLORS.black}
-        map={dotTexture}
-        alphaTest={0.5}
-        size={style.size * (selected ? 1.6 : 1)}
-        sizeAttenuation={false}
-        depthTest={false}
-      />
-    </points>
+    <>
+      <mesh geometry={areas} position={[0, 0.05, 0]} renderOrder={-1}>
+        <meshBasicMaterial color={COLORS.water} depthWrite={false} />
+      </mesh>
+      <Line segments points={rivers} color={COLORS.water} lineWidth={RIVER_WIDTH_PX} depthWrite={false} renderOrder={-1} />
+      <Line segments points={streams} color={COLORS.water} lineWidth={STREAM_WIDTH_PX} depthWrite={false} renderOrder={-1} />
+      <points geometry={points} position={[0, 0.1, 0]} renderOrder={-1}>
+        <pointsMaterial
+          color={COLORS.water}
+          map={dot}
+          alphaTest={0.5}
+          size={WATER_POINT_PX}
+          sizeAttenuation={false}
+          depthWrite={false}
+        />
+      </points>
+    </>
   )
 }
 
@@ -155,11 +156,6 @@ function City({ data, selected, onSelect, flyTo }) {
   const city = useMemo(() => buildCity(buildings), [buildings])
   const outlines = useMemo(() => buildLines(data.city.buildings), [data])
   const findOutline = useMemo(() => buildOutlineIndex(data.city.buildings), [data])
-  const streams = useMemo(
-    () => buildLines(data.context.features.filter((f) => f.properties.kind === 'waterway').map((f) => f.geometry.coordinates)),
-    [data],
-  )
-  const river = useMemo(() => buildLines(data.city.river), [data])
   const boundary = useMemo(
     () => data.city.boundary.map((ring) => ring.map((point) => {
       const [x, z] = toLocal(point)
@@ -220,17 +216,13 @@ function City({ data, selected, onSelect, flyTo }) {
         <meshBasicMaterial colorWrite={false} depthWrite={false} />
       </mesh>
 
+      <Water water={data.water} />
+
       {boundary.map((points, index) => (
         <Line key={index} points={points} color={COLORS.black} lineWidth={2.5} />
       ))}
       <lineSegments geometry={outlines} position={[0, 0.2, 0]}>
         <lineBasicMaterial color={COLORS.black} />
-      </lineSegments>
-      <lineSegments geometry={river} position={[0, 0.2, 0]}>
-        <lineBasicMaterial color={COLORS.black} />
-      </lineSegments>
-      <lineSegments geometry={streams} position={[0, 0.2, 0]}>
-        <lineBasicMaterial color={COLORS.black} clippingPlanes={EDGE_PLANES} />
       </lineSegments>
 
       <mesh
@@ -251,12 +243,14 @@ function City({ data, selected, onSelect, flyTo }) {
         </mesh>
       )}
 
-      {Object.entries(ROUTE_STYLES).map(([key, style]) => (
-        <RouteDots
+      {Object.entries(ROUTE_WIDTHS_PX).map(([key, width]) => (
+        <Line
           key={key}
-          coordinates={data.routes[key].coordinates}
-          style={style}
-          selected={selected?.kind === 'route' && selected.key === key}
+          points={routeLines[key].map(([x, z]) => [x, 1, z])}
+          color={COLORS.routeRed}
+          lineWidth={width * (selected?.kind === 'route' && selected.key === key ? 1.5 : 1)}
+          depthTest={false}
+          renderOrder={5}
         />
       ))}
       <Title position={routeMiddle(data.routes.most.coordinates)} anchor={[-0.08, 0.5]}>
@@ -294,9 +288,6 @@ export default function CityScene({ data, selected, onSelect, viewRequest }) {
       flat
       frameloop="demand"
       camera={{ position: start.current.position, fov: FOV, near: 20, far: 80000 }}
-      onCreated={({ gl }) => {
-        gl.localClippingEnabled = true
-      }}
       onPointerMissed={() => onSelect(null)}
     >
       <color attach="background" args={[COLORS.white]} />

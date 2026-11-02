@@ -132,18 +132,20 @@ body {
   background: #000;
 }
 
-.symbol.dots-most {
-  height: 6px;
-  margin-top: 6px;
-  background-image: radial-gradient(circle, #000 0 2px, transparent 2.5px);
-  background-size: 6px 6px;
+.symbol.water {
+  background: #a9d8f2;
 }
 
-.symbol.dots-least {
-  height: 9px;
-  margin-top: 4px;
-  background-image: radial-gradient(circle, transparent 0 2px, #000 2.5px 3.5px, transparent 4px);
-  background-size: 9px 9px;
+.symbol.route-most {
+  height: 5px;
+  margin-top: 7px;
+  background: #d0021b;
+}
+
+.symbol.route-least {
+  height: 2px;
+  margin-top: 8px;
+  background: #d0021b;
 }
 
 .attribution {

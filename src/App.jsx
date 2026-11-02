@@ -9,6 +9,7 @@ const FILES = {
   highlights: 'osm/highlights.json',
   routes: 'osm/routes.json',
   city: 'osm/city.json',
+  water: 'osm/water.json',
 }
 
 const ATTRIBUTION =
@@ -129,13 +130,14 @@ export default function App() {
           <Key kind="black">Buildings in the map area</Key>
           <Key kind="outline">Buildings in the rest of Weimar</Key>
           <Key kind="border">Boundary of the city of Weimar</Key>
+          <Key kind="water">Rivers, streams, ponds, springs, wells and fountains</Key>
         </ul>
         <h2>merketalstraße to bauhaus</h2>
         <ul className="legend">
-          <Key kind="dots-most">
+          <Key kind="route-most">
             <strong>SOCIAL.</strong> <RouteLine route={data.routes.most} />
           </Key>
-          <Key kind="dots-least">
+          <Key kind="route-least">
             <strong>ANTISOCIAL.</strong> <RouteLine route={data.routes.least} />
           </Key>
         </ul>

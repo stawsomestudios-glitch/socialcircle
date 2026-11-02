@@ -6,6 +6,8 @@ export const COLORS = {
   black: '#000000',
   white: '#ffffff',
   cobalt: '#0047ab',
+  routeRed: '#d0021b',
+  water: '#a9d8f2', // light baby blue
   selected: '#8a8a8a',
 }
 
@@ -23,14 +25,6 @@ const [BOUND_X1, BOUND_Z1] = toLocal([EAST, SOUTH])
 
 // The black map area, as [x0, z0, x1, z1].
 export const AREA_BOX = [BOUND_X0, BOUND_Z0, BOUND_X1, BOUND_Z1]
-
-// These cut the streams off at the edge of the black map area.
-export const EDGE_PLANES = [
-  new THREE.Plane(new THREE.Vector3(1, 0, 0), -BOUND_X0),
-  new THREE.Plane(new THREE.Vector3(-1, 0, 0), BOUND_X1),
-  new THREE.Plane(new THREE.Vector3(0, 0, 1), -BOUND_Z0),
-  new THREE.Plane(new THREE.Vector3(0, 0, -1), BOUND_Z1),
-]
 
 // The smallest box around a list of longitude and latitude points, as [x0, z0, x1, z1].
 export function boxOf(coordinates) {
@@ -145,24 +139,39 @@ export function buildLines(lines) {
   return lineGeometry(positions)
 }
 
-// Evenly spaced dots along a route, starting `start` metres in.
-export function buildDots(coordinates, spacing, start) {
-  const points = coordinates.map(toLocal)
-  const positions = []
-  let next = start
-  let walked = 0
-  for (let i = 0; i < points.length - 1; i++) {
-    const [ax, az] = points[i]
-    const [bx, bz] = points[i + 1]
-    const length = Math.hypot(bx - ax, bz - az)
-    while (next <= walked + length) {
-      const t = length ? (next - walked) / length : 0
-      positions.push(ax + (bx - ax) * t, 0, az + (bz - az) * t)
-      next += spacing
-    }
-    walked += length
-  }
-  return lineGeometry(positions)
+// Ponds and other water areas as one drawing. Each area is an outline, then any islands.
+export function buildWaterAreas(areas) {
+  return mergeGeometries(
+    areas.map(([outline, ...islands]) => {
+      const shape = new THREE.Shape(toShapePoints(outline))
+      islands.forEach((island) => shape.holes.push(new THREE.Path(toShapePoints(island))))
+      const geometry = new THREE.ShapeGeometry(shape)
+      geometry.rotateX(-Math.PI / 2)
+      return geometry
+    }),
+  )
+}
+
+// Lines as pairs of points, for drawing many of them at a set width on screen.
+export function linesToPairs(lines, height) {
+  const pairs = []
+  lines.forEach((line) => {
+    const points = line.map(toLocal)
+    points.slice(1).forEach(([x, z], index) => {
+      pairs.push([points[index][0], height, points[index][1]], [x, height, z])
+    })
+  })
+  return pairs
+}
+
+// Springs, wells and fountains that are single points.
+export function buildPoints(coordinates) {
+  return lineGeometry(
+    coordinates.flatMap((point) => {
+      const [x, z] = toLocal(point)
+      return [x, 0, z]
+    }),
+  )
 }
 
 export function distanceToLine([x, z], points) {
