@@ -7,39 +7,34 @@ import {
   AREA_BOX,
   COLORS,
   boxOf,
-  buildBustle,
   buildCity,
   buildLines,
   buildOutlineIndex,
   buildPoints,
   buildWaterAreas,
   cameraFor,
-  distanceToLine,
   extrudeBuilding,
   findBuilding,
   flatFootprint,
-  routeMiddle,
   isInsideMap,
   linesToPairs,
-  paintBustle,
-  placeOf,
   titlePosition,
   toLocal,
 } from './cityGeometry.js'
+import { PLANE, makeTexture, paintTexture } from './heat.js'
 
 const FOV = 40
 const CLICK_MARGIN_M = 1000 // how much area to show around whatever you click
 const CITY_MARGIN_M = 1000
 const AREA_MARGIN_M = 150
-// Both routes are red lines, told apart by thickness, in screen pixels.
-const ROUTE_WIDTHS_PX = { most: 6, least: 2 }
 const RIVER_WIDTH_PX = 3
 const STREAM_WIDTH_PX = 1.5
 const WATER_POINT_PX = 6
-const ROUTE_CLICK_PX = 10 // a click this close to a route counts as clicking it
 const FLIGHT_MS = 1100
 
 const allPoints = (rings) => rings.flat()
+// Long names are cut short on the map so they don't cover other titles. The panel shows them in full.
+const short = (text) => (text.length > 24 ? `${text.slice(0, 22).trim()}…` : text)
 
 // A title on a small white plate that always faces the camera and keeps its size.
 function Title({ position, anchor, children }) {
@@ -111,26 +106,20 @@ function Water({ water }) {
   )
 }
 
-// The glow on the ground. Where areas overlap, the strongest shows instead of adding up.
-function Bustle({ buildings, highlights, hour }) {
+// The heat map on the ground, under the buildings. It repaints whenever the time changes.
+function Heat({ grid, max }) {
   const invalidate = useThree((state) => state.invalidate)
-  const bustle = useMemo(() => buildBustle(buildings, highlights), [buildings, highlights])
+  const texture = useMemo(makeTexture, [])
 
   useEffect(() => {
-    paintBustle(bustle, hour)
+    paintTexture(texture, grid, max)
     invalidate()
-  }, [bustle, hour, invalidate])
+  }, [texture, grid, max, invalidate])
 
   return (
-    <mesh geometry={bustle.geometry} position={[0, 0.15, 0]}>
-      <meshBasicMaterial
-        vertexColors
-        side={THREE.DoubleSide}
-        transparent
-        depthWrite={false}
-        blending={THREE.CustomBlending}
-        blendEquation={THREE.MinEquation}
-      />
+    <mesh position={[PLANE.x, 0.15, PLANE.z]} rotation={[-Math.PI / 2, 0, 0]}>
+      <planeGeometry args={[PLANE.width, PLANE.depth]} />
+      <meshBasicMaterial map={texture} transparent depthWrite={false} />
     </mesh>
   )
 }
@@ -174,7 +163,7 @@ function CameraFlight({ flight }) {
   return null
 }
 
-function City({ data, hour, selected, onSelect, flyTo }) {
+function City({ data, grid, max, spots, selected, onSelect, flyTo }) {
   const buildings = useMemo(() => {
     const outside = data.context.features.filter((f) => f.properties.kind === 'building')
     return [...data.buildings.features, ...outside].filter(isInsideMap)
@@ -189,36 +178,17 @@ function City({ data, hour, selected, onSelect, flyTo }) {
     })),
     [data],
   )
-  const routes = data.routes.hours[hour]
-  const routeLines = useMemo(
-    () => ({ most: routes.most.coordinates.map(toLocal), least: routes.least.coordinates.map(toLocal) }),
-    [routes],
-  )
-
   const selectedShape = useMemo(() => {
     if (selected?.kind === 'building') return extrudeBuilding(selected.feature)
     if (selected?.kind === 'outline') return flatFootprint(selected.ring)
     return null
   }, [selected])
 
-  // A route under the pointer wins over most buildings, because it is so much thinner.
   function pick(event, feature) {
     if (event.delta > 4) return
     event.stopPropagation()
     const point = [event.point.x, event.point.z]
-    const perPixel =
-      (2 * Math.tan((FOV * Math.PI) / 360) * event.camera.position.distanceTo(event.point)) /
-      event.nativeEvent.target.clientHeight
-    const near = Object.entries(routeLines)
-      .map(([key, line]) => ({ key, distance: distanceToLine(point, line) }))
-      .sort((a, b) => a.distance - b.distance)[0]
-
-    const onMarkedBuilding = feature && placeOf(feature) // the routes end at this building
-
-    if (!onMarkedBuilding && near.distance <= ROUTE_CLICK_PX * perPixel) {
-      onSelect({ kind: 'route', key: near.key })
-      flyTo(boxOf(routes[near.key].coordinates), CLICK_MARGIN_M)
-    } else if (feature) {
+    if (feature) {
       onSelect({ kind: 'building', feature })
       flyTo(boxOf(feature.geometry.coordinates[0]), CLICK_MARGIN_M)
     } else {
@@ -234,14 +204,14 @@ function City({ data, hour, selected, onSelect, flyTo }) {
 
   return (
     <>
-      {/* An invisible sheet that catches clicks on the outlines and on the routes. */}
+      {/* An invisible sheet that catches clicks on the outlined buildings. */}
       <mesh rotation={[-Math.PI / 2, 0, 0]} onClick={(event) => pick(event, null)}>
         <planeGeometry args={[200000, 200000]} />
         <meshBasicMaterial colorWrite={false} depthWrite={false} />
       </mesh>
 
       <Water water={data.water} />
-      <Bustle buildings={buildings} highlights={data.highlights} hour={hour} />
+      <Heat grid={grid} max={max} />
 
       {boundary.map((points, index) => (
         <Line key={index} points={points} color={COLORS.black} lineWidth={2.5} />
@@ -268,22 +238,11 @@ function City({ data, hour, selected, onSelect, flyTo }) {
         </mesh>
       )}
 
-      {Object.entries(ROUTE_WIDTHS_PX).map(([key, width]) => (
-        <Line
-          key={key}
-          points={routeLines[key].map(([x, z]) => [x, 1, z])}
-          color={COLORS.routeRed}
-          lineWidth={width * (selected?.kind === 'route' && selected.key === key ? 1.5 : 1)}
-          depthTest={false}
-          renderOrder={5}
-        />
+      {spots.map((spot, index) => (
+        <Title key={`${index}-${spot.name}`} position={[spot.x, 3, spot.z]} anchor={[0.5, 0.5]}>
+          {`${index + 1} · ${short(spot.name.toLowerCase())}`}
+        </Title>
       ))}
-      <Title position={routeMiddle(routes.most.coordinates)} anchor={[-0.08, 0.5]}>
-        SOCIAL
-      </Title>
-      <Title position={routeMiddle(routes.least.coordinates)} anchor={[1.05, 0.5]}>
-        ANTISOCIAL
-      </Title>
 
       {TITLES.map((title) => (
         <Title key={title.text} position={titlePosition(buildings, title)} anchor={title.anchor}>
@@ -294,7 +253,7 @@ function City({ data, hour, selected, onSelect, flyTo }) {
   )
 }
 
-export default function CityScene({ data, hour, selected, onSelect, viewRequest }) {
+export default function CityScene({ data, grid, max, spots, selected, onSelect, viewRequest }) {
   const [flight, setFlight] = useState(null)
   const cityBox = useMemo(() => boxOf(allPoints(data.city.boundary)), [data])
   const start = useRef(cameraFor(cityBox, CITY_MARGIN_M, window.innerWidth / window.innerHeight, FOV))
@@ -302,9 +261,11 @@ export default function CityScene({ data, hour, selected, onSelect, viewRequest 
   useEffect(() => {
     if (!viewRequest) return
     setFlight(
-      viewRequest.name === 'area'
-        ? { box: AREA_BOX, margin: AREA_MARGIN_M }
-        : { box: cityBox, margin: CITY_MARGIN_M },
+      viewRequest.box
+        ? { box: viewRequest.box, margin: viewRequest.margin }
+        : viewRequest.name === 'area'
+          ? { box: AREA_BOX, margin: AREA_MARGIN_M }
+          : { box: cityBox, margin: CITY_MARGIN_M },
     )
   }, [viewRequest, cityBox])
 
@@ -318,7 +279,9 @@ export default function CityScene({ data, hour, selected, onSelect, viewRequest 
       <color attach="background" args={[COLORS.white]} />
       <City
         data={data}
-        hour={hour}
+        grid={grid}
+        max={max}
+        spots={spots}
         selected={selected}
         onSelect={onSelect}
         flyTo={(box, margin) => setFlight({ box, margin })}

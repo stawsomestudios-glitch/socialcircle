@@ -29,7 +29,7 @@ out geom;
 
 ## `highlights.json`
 
-The buildings where you may run into people you know, keyed by building id, with `category` (`museum`, `library`, `cafe`, `food`, `shop` or `bauhaus`) and the OpenStreetMap `names` found there. `scripts/build-osm-highlights.mjs` makes it. Downloaded 2026-11-02, same licence.
+The buildings where people gather, keyed by building id, with `category` (`museum`, `library`, `cafe`, `food`, `shop` or `bauhaus`) and the OpenStreetMap `names` found there. `scripts/build-osm-highlights.mjs` makes it. Downloaded 2026-11-02, same licence.
 
 `activity` is an estimated 24-hour rhythm, from 0 to 1. Nothing here measures where people actually go. It combines two things: a typical rhythm for each kind of place, assumed in `scripts/build-osm-highlights.mjs`, and the place's real opening hours from OpenStreetMap, where listed, read for a weekday in November. A building with several places is as busy as its busiest one.
 
@@ -65,17 +65,16 @@ The strip south of 50.965 came from one more query, 2026-11-02:
 out geom;
 ```
 
-## `routes.json`
+## The heat map
 
-The most and least social walking routes for each hour of the day, in `hours[0]` to `hours[23]`, from a general point on Merketalstraße to the Bauhaus main building, made by `scripts/build-routes.mjs`.
+Not a file: the page works it out when it loads, in `src/map/heat.js`. It shows where people are likely to gather at each hour of a typical weekday.
 
-- The network is every OpenStreetMap path and street inside the map that people may walk on. Private ways and motorways are left out.
-- A stretch is as busy as the busiest social building within 25 m of it at that hour, from `activity` in `highlights.json`. `bustle_percent` is that averaged over the whole route.
-- Neither route may be longer than 1.6 times the shortest walk. Without a limit, the most social route could wander forever.
-- Walking speed is 4.8 km/h, which is 80 m per minute.
-- `places_passed` counts social buildings whose area a route's points touch and that are at least 25% busy at that hour. It says the route goes near them, not that anyone is there.
+- Every place in `highlights.json` warms the ground around it by its `activity` at that hour, times how many people it holds: an assumed crowd factor per kind of place (Bauhaus 3, library 1.6, museum 1.4, restaurant or bar 1.3, cafe 1, shop 0.7) and the size of its footprint.
+- Squares and green spaces from the city kit's `plots.geojson` (`square` and `recreation`) follow an assumed day rhythm, written in `heat.js`.
+- The warmth spreads about 24 m with a soft edge, on a 6 m grid. All 24 hours share one scale, so hours can be compared. Between whole hours the page blends the two.
+- The three busiest spots are the warmest cells at least 180 m apart, named after the place that warms them most. Squares have no names in the data, so they take the nearest named place.
 
-Each route ends on the path closest to the building's outline, because the data doesn't show where its doors are.
+The crowd factors and the square and park rhythms are assumptions, not data. Nothing here counts real people.
 
 ## `city.json`
 
